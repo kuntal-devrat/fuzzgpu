@@ -1,0 +1,9 @@
+[workspace]
+members = ["crates/fuzzgpu-core", "crates/fuzzgpu-python"]
+resolver = "2"
+
+[workspace.dependencies]
+wgpu = "24.0"
+pollster = "0.4"
+bytemuck = { version = "1.14", features = ["derive"] }
+pyo3 = { version = "0.23", features = ["extension-module"] }

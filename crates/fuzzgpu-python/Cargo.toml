@@ -1,0 +1,17 @@
+[package]
+name = "fuzzgpu-python"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fuzzgpu"
+crate-type = ["cdylib"]
+
+[features]
+default = ["gpu"]
+gpu = ["fuzzgpu-core/gpu"]
+
+[dependencies]
+fuzzgpu-core = { path = "../fuzzgpu-core" }
+pyo3 = { workspace = true }
+pollster = { workspace = true }

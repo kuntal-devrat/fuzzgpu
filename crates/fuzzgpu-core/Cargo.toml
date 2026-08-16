@@ -1,0 +1,17 @@
+[package]
+name = "fuzzgpu-core"
+version = "0.1.0"
+edition = "2021"
+description = "GPU-accelerated fuzzy string matching engine"
+
+[features]
+default = ["gpu"]
+gpu = ["wgpu", "pollster", "bytemuck"]
+
+[dependencies]
+wgpu = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }
+thiserror = "2"
+log = "0.4"
+rayon = "1.10"
