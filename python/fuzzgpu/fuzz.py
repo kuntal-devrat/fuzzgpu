@@ -59,6 +59,9 @@ wratio = WRatio
 
 def ratio_batch(query, candidates, *, processor=None, score_cutoff=0.0, workers=None):
     del workers
+    if processor is None:
+        values = _native.fuzz_ratio_batch(query, candidates)
+        return values if score_cutoff <= 0.0 else [_cutoff(value, score_cutoff) for value in values]
     return [ratio(query, candidate, processor=processor, score_cutoff=score_cutoff) for candidate in candidates]
 
 

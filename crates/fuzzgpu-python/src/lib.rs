@@ -470,31 +470,11 @@ fn jaro_winkler_similarity(py: Python, a: &str, b: &str, p: f64) -> PyResult<f64
     py.allow_threads(|| Ok(fuzzgpu_core::jaro_winkler(a, b, p)))
 }
 
-/// Shared compute for `jaro_winkler_batch` / `..._into`: GPU bitmap kernel
-/// (auto-routed, CPU SIMD fallback).
+/// Shared compute for `jaro_winkler_batch` / `..._into`.
 fn jaro_batch_core(py: Python<'_>, query: &str, cands: &[&str], p: f64) -> PyResult<Vec<f64>> {
-    let pairs: Vec<(&str, &str)> = cands.iter().map(|c| (query, *c)).collect();
-    #[cfg(feature = "gpu")]
-    {
-        if !GpuEngine::is_cpu_only() {
-            if let Ok(kernel) = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get() {
-                match py.allow_threads(|| kernel.compute_batch(&pairs, p)) {
-                    Ok(res) => return Ok(res),
-                    Err(e) => {
-                        if is_force_gpu() {
-                            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                                "GPU Jaro-Winkler batch failed: {}",
-                                e
-                            )));
-                        }
-                        if is_debug_mode() {
-                            log::warn!("fuzzgpu [fallback]: GPU kernel failed ({}), switching to Rayon CPU", e);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // WGSL currently exposes portable f32 arithmetic only. Preserve the public
+    // f64 contract (and exact CPU/GPU parity) until a portable f64 shader path
+    // is available; the CPU implementation remains SIMD/Rayon parallel.
     py.allow_threads(|| Ok(fuzzgpu_core::jaro_winkler_batch(query, cands, p)))
 }
 
@@ -513,27 +493,7 @@ fn jaro_winkler_batch_fn(py: Python, query: &str, candidates: &Bound<'_, PyAny>,
 
 /// Shared compute for `jaro_winkler_cdist` / `..._into`.
 fn jaro_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str], p: f64) -> PyResult<Vec<Vec<f64>>> {
-    #[cfg(feature = "gpu")]
-    {
-        if !GpuEngine::is_cpu_only() {
-            if let Ok(kernel) = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get() {
-                match py.allow_threads(|| kernel.compute_matrix(refs_a, refs_b, p)) {
-                    Ok(res) => return Ok(res),
-                    Err(e) => {
-                        if is_force_gpu() {
-                            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                                "GPU Jaro-Winkler matrix failed: {}",
-                                e
-                            )));
-                        }
-                        if is_debug_mode() {
-                            log::warn!("fuzzgpu [fallback]: GPU matrix failed ({}), switching to Rayon CPU", e);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // See `jaro_batch_core`: favor exact f64 results over the f32 GPU shader.
     py.allow_threads(|| Ok(fuzzgpu_core::jaro::jaro_winkler_cdist_cpu(refs_a, refs_b, p)))
 }
 
