@@ -78,6 +78,9 @@ pub fn damerau_levenshtein_batch(query: &str, candidates: &[&str]) -> Vec<u32> {
 
 /// Cross-product matrix for Damerau-Levenshtein.
 pub fn damerau_levenshtein_cdist(list_a: &[&str], list_b: &[&str]) -> Vec<Vec<u32>> {
+    if list_a.is_empty() || list_b.is_empty() {
+        return vec![];
+    }
     list_a.par_iter().map(|a| {
         list_b.iter().map(|b| damerau_levenshtein_distance(a, b)).collect()
     }).collect()

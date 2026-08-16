@@ -31,6 +31,9 @@ pub fn levenshtein_distance_raw(a: &str, b: &str) -> u32 {
 
 /// Cross-product matrix computed on CPU via Rayon.
 pub fn levenshtein_cdist_cpu(list_a: &[&str], list_b: &[&str]) -> Vec<Vec<u32>> {
+    if list_a.is_empty() || list_b.is_empty() {
+        return vec![];
+    }
     list_a.par_iter().map(|a| {
         list_b.iter().map(|b| levenshtein_distance_raw(a, b)).collect()
     }).collect()

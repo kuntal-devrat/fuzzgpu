@@ -81,6 +81,9 @@ pub fn jaro_winkler_batch(query: &str, candidates: &[&str], p: f64) -> Vec<f64> 
 
 /// Cross-product similarity matrix on CPU via Rayon.
 pub fn jaro_winkler_cdist_cpu(list_a: &[&str], list_b: &[&str], p: f64) -> Vec<Vec<f64>> {
+    if list_a.is_empty() || list_b.is_empty() {
+        return vec![];
+    }
     list_a.par_iter().map(|a| {
         list_b.iter().map(|b| jaro_winkler(a, b, p)).collect()
     }).collect()
