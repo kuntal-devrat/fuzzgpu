@@ -320,4 +320,10 @@ class TestJaroOptimized:
 
 class TestVersion:
     def test_version_string(self):
-        assert fuzzgpu.__version__ == "0.1.3"
+        # Must be a valid semver and match the installed package metadata —
+        # never a hardcoded literal, so version bumps don't break CI.
+        import re
+        from importlib.metadata import version as pkg_version
+
+        assert re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?", fuzzgpu.__version__)
+        assert fuzzgpu.__version__ == pkg_version("fuzzgpu")
