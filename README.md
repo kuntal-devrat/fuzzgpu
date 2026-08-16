@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/Flaxmbot/fuzzgpu/main/assets/logo.png" alt="fuzzgpu logo" width="140" height="140" />
+<img src="https://raw.githubusercontent.com/kuntal-devrat/fuzzgpu/main/assets/logo.png" alt="fuzzgpu logo" width="140" height="140" />
 
 # fuzzgpu
 
@@ -11,7 +11,7 @@
 [![PyPI Version](https://img.shields.io/badge/pypi-v0.1.0-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg?style=flat-square)](https://www.rust-lang.org)
-[![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/Flaxmbot/fuzzgpu)
+[![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
 
 </div>
 

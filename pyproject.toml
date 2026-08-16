@@ -9,7 +9,7 @@ description = "Hardware-accelerated fuzzy string matching & sequence alignment â
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
-authors = [{ name = "Flaxmbot" }]
+authors = [{ name = "Devrat Kuntal" }]
 keywords = ["gpu", "fuzzy", "string-matching", "levenshtein", "damerau", "jaro-winkler", "needleman-wunsch", "webgpu"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -27,9 +27,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Flaxmbot/fuzzgpu"
-Repository = "https://github.com/Flaxmbot/fuzzgpu"
-Issues = "https://github.com/Flaxmbot/fuzzgpu/issues"
+Homepage = "https://github.com/kuntal-devrat/fuzzgpu"
+Repository = "https://github.com/kuntal-devrat/fuzzgpu"
+Issues = "https://github.com/kuntal-devrat/fuzzgpu/issues"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
