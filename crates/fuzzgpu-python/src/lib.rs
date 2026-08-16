@@ -448,6 +448,31 @@ fn needleman_wunsch_affine(py: Python, a: &str, b: &str, match_score: i64, misma
 fn needleman_wunsch_affine_batch(py: Python, query: &str, candidates: &Bound<'_, PyAny>, match_score: i64, mismatch_score: i64, gap_open: i64, gap_extend: i64) -> PyResult<Vec<i64>> {
     let refs = borrow_strs(candidates)?;
     let refs = str_refs(&refs)?;
+    // Route through the GPU affine Needleman-Wunsch kernel when available.
+    // Strings > 128 chars are automatically routed to CPU inside the kernel.
+    #[cfg(feature = "gpu")]
+    {
+        if !GpuEngine::is_cpu_only() {
+            if let Ok(kernel) = fuzzgpu_core::needleman::gpu_ext::GpuNeedlemanAffineKernel::get() {
+                let pairs: Vec<(&str, &str)> = refs.iter().map(|c| (query, *c)).collect();
+                match py.allow_threads(|| kernel.compute_batch(&pairs, match_score, mismatch_score, gap_open, gap_extend)) {
+                    Ok(res) => return Ok(res),
+                    Err(e) => {
+                        if is_force_gpu() {
+                            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                                "GPU Needleman-Wunsch affine batch failed: {e}"
+                            )));
+                        }
+                        if is_debug_mode() {
+                            log::warn!(
+                                "fuzzgpu [fallback]: GPU NW kernel failed ({}), switching to Rayon CPU", e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch_affine_batch(query, &refs, match_score, mismatch_score, gap_open, gap_extend)))
 }
 
@@ -472,9 +497,34 @@ fn jaro_winkler_similarity(py: Python, a: &str, b: &str, p: f64) -> PyResult<f64
 
 /// Shared compute for `jaro_winkler_batch` / `..._into`.
 fn jaro_batch_core(py: Python<'_>, query: &str, cands: &[&str], p: f64) -> PyResult<Vec<f64>> {
-    // WGSL currently exposes portable f32 arithmetic only. Preserve the public
-    // f64 contract (and exact CPU/GPU parity) until a portable f64 shader path
-    // is available; the CPU implementation remains SIMD/Rayon parallel.
+    // Route through the GPU Jaro-Winkler kernel when available and not
+    // CPU-only. On integrated GPUs the auto threshold is usize::MAX, so the
+    // kernel itself routes to the SIMD CPU path — no wasted dispatch overhead.
+    // The kernel returns f32; the Rust wrapper converts to f64 and falls back
+    // to CPU on any error (unless FUZZGPU_FORCE_GPU is set).
+    #[cfg(feature = "gpu")]
+    {
+        if !GpuEngine::is_cpu_only() {
+            if let Ok(kernel) = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get() {
+                let pairs: Vec<(&str, &str)> = cands.iter().map(|c| (query, *c)).collect();
+                match py.allow_threads(|| kernel.compute_batch(&pairs, p)) {
+                    Ok(res) => return Ok(res),
+                    Err(e) => {
+                        if is_force_gpu() {
+                            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                                "GPU Jaro-Winkler batch failed: {e}"
+                            )));
+                        }
+                        if is_debug_mode() {
+                            log::warn!(
+                                "fuzzgpu [fallback]: GPU Jaro kernel failed ({}), switching to Rayon CPU", e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     py.allow_threads(|| Ok(fuzzgpu_core::jaro_winkler_batch(query, cands, p)))
 }
 
@@ -493,7 +543,30 @@ fn jaro_winkler_batch_fn(py: Python, query: &str, candidates: &Bound<'_, PyAny>,
 
 /// Shared compute for `jaro_winkler_cdist` / `..._into`.
 fn jaro_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str], p: f64) -> PyResult<Vec<Vec<f64>>> {
-    // See `jaro_batch_core`: favor exact f64 results over the f32 GPU shader.
+    // Route through the GPU matrix kernel when available. Falls back to CPU
+    // on any GPU error (unless FUZZGPU_FORCE_GPU is set).
+    #[cfg(feature = "gpu")]
+    {
+        if !GpuEngine::is_cpu_only() {
+            if let Ok(kernel) = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get() {
+                match py.allow_threads(|| kernel.compute_matrix(refs_a, refs_b, p)) {
+                    Ok(res) => return Ok(res),
+                    Err(e) => {
+                        if is_force_gpu() {
+                            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                                "GPU Jaro-Winkler matrix failed: {e}"
+                            )));
+                        }
+                        if is_debug_mode() {
+                            log::warn!(
+                                "fuzzgpu [fallback]: GPU Jaro matrix failed ({}), switching to Rayon CPU", e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     py.allow_threads(|| Ok(fuzzgpu_core::jaro::jaro_winkler_cdist_cpu(refs_a, refs_b, p)))
 }
 
@@ -560,6 +633,16 @@ fn fuzz_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
 #[pyo3(text_signature = "(a, b, /)")]
 fn fuzz_partial_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
     py.allow_threads(|| Ok(fuzzgpu_core::partial_ratio(a, b)))
+}
+
+/// partial_ratio_alignment: returns (score, src_start, dest_start, length).
+/// `src_start` is always 0 (shorter string); `dest_start` is the char offset
+/// in the longer string where the best matching window begins; `length` is the
+/// window width in chars.
+#[pyfunction]
+#[pyo3(text_signature = "(a, b, /)")]
+fn fuzz_partial_ratio_alignment(py: Python, a: &str, b: &str) -> PyResult<(f64, usize, usize, usize)> {
+    py.allow_threads(|| Ok(fuzzgpu_core::partial_ratio_alignment(a, b)))
 }
 
 #[pyfunction]
@@ -640,6 +723,57 @@ fn jaro_optimized(py: Python, a: &str, b: &str) -> PyResult<f64> {
             Ok(fuzzgpu_core::jaro(a, b))
         }
     })
+}
+
+// ── Additional fuzzy scorers (rapidfuzz compat) ─────────────
+
+#[pyfunction]
+#[pyo3(text_signature = "(a, b, /)")]
+fn fuzz_partial_token_sort_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
+    py.allow_threads(|| {
+        let a_sorted = {
+            let mut tokens: Vec<&str> = a.split_whitespace().collect();
+            tokens.sort_unstable();
+            tokens.join(" ")
+        };
+        let b_sorted = {
+            let mut tokens: Vec<&str> = b.split_whitespace().collect();
+            tokens.sort_unstable();
+            tokens.join(" ")
+        };
+        Ok(fuzzgpu_core::partial_ratio(&a_sorted, &b_sorted))
+    })
+}
+
+#[pyfunction]
+#[pyo3(text_signature = "(a, b, /)")]
+fn fuzz_partial_token_set_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
+    py.allow_threads(|| {
+        use std::collections::BTreeSet;
+        let t1: BTreeSet<&str> = a.split_whitespace().collect();
+        let t2: BTreeSet<&str> = b.split_whitespace().collect();
+        let inter: Vec<&str> = t1.intersection(&t2).copied().collect();
+        let diff1: Vec<&str> = t1.difference(&t2).copied().collect();
+        let diff2: Vec<&str> = t2.difference(&t1).copied().collect();
+        let inter_str = inter.join(" ");
+        let t1_str = if diff1.is_empty() { inter_str.clone() }
+            else if inter_str.is_empty() { diff1.join(" ") }
+            else { format!("{} {}", inter_str, diff1.join(" ")) };
+        let t2_str = if diff2.is_empty() { inter_str.clone() }
+            else if inter_str.is_empty() { diff2.join(" ") }
+            else { format!("{} {}", inter_str, diff2.join(" ")) };
+        let r01 = fuzzgpu_core::partial_ratio(&inter_str, &t1_str);
+        let r02 = fuzzgpu_core::partial_ratio(&inter_str, &t2_str);
+        let r12 = fuzzgpu_core::partial_ratio(&t1_str, &t2_str);
+        Ok(r01.max(r02).max(r12))
+    })
+}
+
+#[pyfunction]
+#[pyo3(text_signature = "(a, b, /)")]
+fn fuzz_qratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
+    // QRatio is identical to ratio — it is a rapidfuzz compatibility alias.
+    py.allow_threads(|| Ok(fuzzgpu_core::ratio(a, b)))
 }
 
 // ── Control & Utilities ─────────────────────────────────────
@@ -785,12 +919,16 @@ fn fuzzgpu(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Fuzzy matching
     m.add_function(wrap_pyfunction!(fuzz_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_partial_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(fuzz_partial_ratio_alignment, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_token_sort_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_token_set_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_wratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_ratio_batch, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_extract, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_extract_one, m)?)?;
+    m.add_function(wrap_pyfunction!(fuzz_partial_token_sort_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(fuzz_partial_token_set_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(fuzz_qratio, m)?)?;
     // Optimized variants
     m.add_function(wrap_pyfunction!(levenshtein_myers, m)?)?;
     m.add_function(wrap_pyfunction!(needleman_wunsch_striped, m)?)?;

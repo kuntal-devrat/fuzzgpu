@@ -1,5 +1,5 @@
 from fuzzgpu import fuzz, process
-from fuzzgpu.distance import Hamming, Indel, Levenshtein, OSA
+from fuzzgpu.distance import Hamming, Indel, Jaro, Levenshtein, OSA
 
 
 def test_editops_and_opcodes_follow_an_optimal_alignment():
@@ -26,3 +26,18 @@ def test_additional_distance_metrics():
     assert Hamming.distance("abc", "ab") == 1
     assert OSA.distance("ab", "ba") == 1
     assert Indel.distance("abc", "adc") == 2
+
+
+def test_process_handles_iterators_distance_scorers_and_plain_callables():
+    assert process.cdist(["a", "b"], iter(["a", "b"])) == [[100.0, 0.0], [0.0, 100.0]]
+    assert process.extractOne("kitten", ["sitting", "kitten"], scorer=Levenshtein.distance) == ("kitten", 0, 1)
+    assert process.extractOne("ABC", ["abc"], scorer=lambda a, b: float(a == b), processor=str.lower) == ("abc", 1.0, 0)
+
+
+def test_distance_cutoffs_do_not_corrupt_similarity_or_jaro_distance():
+    assert Hamming.similarity("abc", "xyz", score_cutoff=1) == 0
+    assert OSA.similarity("abc", "xyz", score_cutoff=1) == 0
+    assert Indel.similarity("abc", "xyz", score_cutoff=1) == 0
+    expected = 1.0 - Jaro.similarity("MARTHA", "MARHTA")
+    assert Jaro.distance("MARTHA", "MARHTA", score_cutoff=0.99) == expected
+    assert Levenshtein.similarity(" a ", "a", processor=str.strip) == 1

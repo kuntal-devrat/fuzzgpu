@@ -449,9 +449,15 @@ impl GpuEngine {
     }
 
     /// How long a GPU readback may take before `FuzzGpuError::Timeout` is
-    /// returned.
+    /// returned. `FUZZGPU_READBACK_TIMEOUT_MS` may override the 10-second
+    /// default; invalid and zero values deliberately fall back to the default.
     pub fn readback_timeout() -> Duration {
-        Duration::from_secs(10)
+        std::env::var("FUZZGPU_READBACK_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|&millis| millis > 0)
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_secs(10))
     }
 
     /// Submit an encoder and synchronously read back `size` bytes from the

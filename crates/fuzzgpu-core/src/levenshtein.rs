@@ -63,10 +63,14 @@ pub fn levenshtein_cdist_cpu(list_a: &[&str], list_b: &[&str]) -> Vec<Vec<u32>> 
                 let pat = crate::simd::MyersPattern::new(qb);
                 let w = crate::simd::myers_simd_width();
                 let mut k = 0;
+                // Use a stack-allocated buffer (max 8 slots, matching the
+                // widest SIMD width) instead of a per-group heap Vec.
+                let mut group_buf: [&[u8]; 8] = [b""; 8];
                 while k + w <= row.len() {
-                    let group: Vec<&[u8]> =
-                        (0..w).map(|t| list_b[k + t].as_bytes()).collect();
-                    let res = crate::simd::levenshtein_myers_width(&pat, &group);
+                    for t in 0..w {
+                        group_buf[t] = list_b[k + t].as_bytes();
+                    }
+                    let res = crate::simd::levenshtein_myers_width(&pat, &group_buf[..w]);
                     for (t, v) in res.into_iter().enumerate() {
                         row[k + t] = v;
                     }
@@ -119,9 +123,13 @@ pub fn levenshtein_batch_auto(pairs: &[(&str, &str)]) -> Vec<u32> {
     out.par_chunks_mut(CHUNK).enumerate().for_each(|(ci, chunk_out)| {
         let start = ci * CHUNK;
         let mut k = 0;
+        // Stack-allocated buffer avoids a heap Vec per SIMD group.
+        let mut group_buf: [&[u8]; 8] = [b""; 8];
         while k + w <= chunk_out.len() {
-            let group: Vec<&[u8]> = (0..w).map(|t| pairs[start + k + t].1.as_bytes()).collect();
-            let res = crate::simd::levenshtein_myers_width(&pat, &group);
+            for t in 0..w {
+                group_buf[t] = pairs[start + k + t].1.as_bytes();
+            }
+            let res = crate::simd::levenshtein_myers_width(&pat, &group_buf[..w]);
             for (t, v) in res.into_iter().enumerate() {
                 chunk_out[k + t] = v;
             }

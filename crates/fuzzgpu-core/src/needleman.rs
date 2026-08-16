@@ -283,6 +283,27 @@ pub mod gpu_ext {
             let n = pairs.len();
             if n == 0 { return Ok(vec![]); }
 
+            // f32 precision guard: the GPU shader computes scores in f32 (WGSL
+            // has no i64).  f32 can represent every integer exactly up to 2^24
+            // (16,777,216).  A worst-case score is max(|match|, |mismatch|,
+            // |gap_open|, |gap_extend|) * max_string_len; if that exceeds 2^24
+            // the GPU would silently lose precision.  Route the whole batch to
+            // CPU when any scoring parameter is out of the safe range.
+            const F32_EXACT_MAX: i64 = 1 << 24; // 16,777,216
+            let max_score_magnitude = [match_score, mismatch_score, gap_open, gap_extend]
+                .iter()
+                .map(|&v| v.unsigned_abs())
+                .max()
+                .unwrap_or(0);
+            let worst_case = max_score_magnitude.saturating_mul(GPU_MAX_STRING_LEN as u64);
+            if worst_case > F32_EXACT_MAX as u64 {
+                // Scoring parameters exceed f32 exact range — use CPU for the
+                // whole batch (same semantics, no precision loss).
+                return Ok(pairs.par_iter()
+                    .map(|(a, b)| needleman_wunsch_affine(a, b, match_score, mismatch_score, gap_open, gap_extend))
+                    .collect());
+            }
+
             let mut results = vec![0i64; n];
             let mut gpu_indices: Vec<usize> = Vec::with_capacity(n);
             let mut cpu_indices: Vec<usize> = Vec::new();
@@ -667,6 +688,34 @@ pub mod gpu_ext {
                 return Ok(vec![]);
             }
 
+            // f32 precision guard — same as compute_batch: if scoring params
+            // exceed the f32 exact integer range (2^24 = 16,777,216) the shader
+            // would silently lose precision; route the whole batch to CPU.
+            const F32_EXACT_MAX: i64 = 1 << 24;
+            let max_score_magnitude = [
+                self.match_score, self.mismatch_score, self.gap_open, self.gap_extend,
+            ]
+            .iter()
+            .map(|&v| v.unsigned_abs())
+            .max()
+            .unwrap_or(0);
+            let worst_case = max_score_magnitude.saturating_mul(GPU_MAX_STRING_LEN as u64);
+            if worst_case > F32_EXACT_MAX as u64 {
+                let mut out: Vec<Vec<i64>> = Vec::with_capacity(n_ops);
+                for pairs in &self.ops {
+                    let row = pairs
+                        .par_iter()
+                        .map(|(a, b)| needleman_wunsch_affine(
+                            a, b,
+                            self.match_score, self.mismatch_score,
+                            self.gap_open, self.gap_extend,
+                        ))
+                        .collect();
+                    out.push(row);
+                }
+                return Ok(out);
+            }
+
             // Classify + pack every pair across ops (mirrors compute_batch:
             // only >128-char pairs route to CPU; no empty/identical
             // short-circuits — the shader handles all lengths <= 128).
@@ -879,4 +928,103 @@ mod tests {
         assert!(score < 8);
     }
 
+    #[test]
+    fn test_linear_empty_strings() {
+        assert_eq!(needleman_wunsch("", "", 2, -1, -2), 0);
+        assert_eq!(needleman_wunsch("abc", "", 2, -1, -2), -6);
+        assert_eq!(needleman_wunsch("", "abc", 2, -1, -2), -6);
+    }
+
+    #[test]
+    fn test_affine_empty_strings() {
+        // gap_open=-3, gap_extend=-1: gap of length k costs -3 + k*(-1)
+        assert_eq!(needleman_wunsch_affine("", "", 2, -1, -3, -1), 0);
+        assert_eq!(needleman_wunsch_affine("abc", "", 2, -1, -3, -1), -3 + 3 * -1);
+        assert_eq!(needleman_wunsch_affine("", "abc", 2, -1, -3, -1), -3 + 3 * -1);
+    }
+
+    /// Confirm that large scoring parameters that would exceed f32 precision
+    /// (2^24 = 16,777,216) are correctly detected and routed to CPU even when
+    /// the GPU feature is compiled in.  The CPU result must be exact.
+    #[test]
+    fn test_large_scoring_params_exact() {
+        // match_score = 1_000_000; for 4 identical chars the score = 4_000_000
+        // which is below 2^24, but match_score * 128 (GPU_MAX_STRING_LEN) =
+        // 128_000_000 which is above 2^24.  The guard must route to CPU.
+        let score = needleman_wunsch_affine("AGCT", "AGCT", 1_000_000, -1, -3, -1);
+        assert_eq!(score, 4_000_000, "large match_score must compute exactly on CPU");
+    }
+
+    #[test]
+    fn test_unicode_alignment() {
+        // Basic Unicode: café vs cafe — one substitution (é→e).
+        let score_sub = needleman_wunsch_affine("café", "cafe", 2, -1, -3, -1);
+        let score_same = needleman_wunsch_affine("café", "café", 2, -1, -3, -1);
+        assert!(score_sub < score_same, "substitution must reduce score");
+    }
+
+    #[cfg(feature = "gpu")]
+    mod gpu_tests {
+        use super::*;
+        use crate::gpu::GpuEngine;
+        use crate::needleman::gpu_ext::GpuNeedlemanAffineKernel;
+
+        fn gpu_kernel_or_skip() -> Option<&'static GpuNeedlemanAffineKernel> {
+            match GpuNeedlemanAffineKernel::get() {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    if crate::gpu::require_gpu() {
+                        panic!("FUZZGPU_REQUIRE_GPU is set but no GPU device: {e}");
+                    }
+                    eprintln!("skipping GPU NW test (no device): {e}");
+                    None
+                }
+            }
+        }
+
+        /// f32 precision guard: scoring params that exceed 2^24 * max_len must
+        /// route to CPU, producing an exact i64 result.
+        #[test]
+        fn test_gpu_f32_precision_guard_routes_to_cpu() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            // match_score = 200_000 * 128 = 25_600_000 > 2^24.
+            let pairs = vec![("AGCT", "AGCT"), ("hello", "world")];
+            let gpu_res = kernel
+                .compute_batch(&pairs, 200_000, -1, -3, -1)
+                .expect("compute_batch should succeed (routes to CPU)");
+            let cpu_res: Vec<i64> = pairs
+                .iter()
+                .map(|(a, b)| needleman_wunsch_affine(a, b, 200_000, -1, -3, -1))
+                .collect();
+            assert_eq!(gpu_res, cpu_res, "large scoring params must be exact (CPU path)");
+        }
+
+        /// Normal range scoring params should still match CPU exactly on GPU.
+        #[test]
+        fn test_gpu_normal_scoring_matches_cpu() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            GpuEngine::set_gpu_threshold(Some(1));
+
+            let mut state: u64 = 0xDEAD_CAFE;
+            let mut pairs: Vec<(String, String)> = Vec::with_capacity(500);
+            for _ in 0..500 {
+                let la = 1 + (state % 60) as usize;
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let lb = 1 + (state % 60) as usize;
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let a: String = (0..la).map(|_| { state = state.wrapping_mul(6364136223846793005).wrapping_add(1); (b'a' + (state >> 33) as u8 % 26) as char }).collect();
+                let b: String = (0..lb).map(|_| { state = state.wrapping_mul(6364136223846793005).wrapping_add(1); (b'a' + (state >> 33) as u8 % 26) as char }).collect();
+                pairs.push((a, b));
+            }
+            let refs: Vec<(&str, &str)> = pairs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+            let gpu = kernel.compute_batch(&refs, 2, -1, -3, -1).expect("GPU NW batch");
+            let cpu: Vec<i64> = refs.iter().map(|(a, b)| needleman_wunsch_affine(a, b, 2, -1, -3, -1)).collect();
+            assert_eq!(gpu, cpu, "GPU NW must match CPU for normal scoring range");
+            GpuEngine::set_gpu_threshold(None);
+        }
+    }
 }
+

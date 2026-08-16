@@ -16,11 +16,11 @@ pub fn damerau_levenshtein_distance(a: &str, b: &str) -> u32 {
 }
 
 fn damerau_bytes(a: &[u8], b: &[u8]) -> u32 {
-    // Safety invariant, not a debug-only check: this function indexes `da` by raw byte
-    // value, so non-ASCII bytes would silently produce wrong distances (byte-level
-    // collisions between UTF-8 continuation bytes and ASCII). `assert!` survives
-    // release builds, which is what PyPI wheels ship.
-    debug_assert!(a.is_ascii() && b.is_ascii(), "damerau_bytes requires ASCII inputs");
+    // Safety invariant: this function indexes `da` by raw byte value (0..=255),
+    // so non-ASCII bytes would silently produce wrong distances due to byte-level
+    // collisions between UTF-8 continuation bytes and ASCII characters.
+    // This assert! fires in both debug AND release builds (PyPI wheels ship release).
+    assert!(a.is_ascii() && b.is_ascii(), "damerau_bytes requires ASCII inputs");
     let (m, n) = (a.len(), b.len());
     if m == 0 { return n as u32; }
     if n == 0 { return m as u32; }
@@ -770,10 +770,18 @@ mod tests {
     }
 
     // The ASCII gate is a safety invariant (`assert!`, not `debug_assert!`):
-    // it must fire even in release builds.
+    // it must fire in both debug and release builds.
     #[test]
     #[should_panic(expected = "damerau_bytes requires ASCII inputs")]
     fn test_damerau_bytes_rejects_non_ascii() {
+        let _ = damerau_bytes("café".as_bytes(), b"cafe");
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    #[should_panic(expected = "damerau_bytes requires ASCII inputs")]
+    fn test_damerau_bytes_rejects_non_ascii_release() {
+        // Verify the assert! (not debug_assert!) fires in release builds too.
         let _ = damerau_bytes("café".as_bytes(), b"cafe");
     }
 }

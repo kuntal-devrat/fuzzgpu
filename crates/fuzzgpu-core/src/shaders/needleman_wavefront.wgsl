@@ -77,11 +77,18 @@ fn main(
     // Cells that do not exist for degenerate pairs are never read: the only
     // reader of diag k column j is cell (i+1, j+1) on diagonal k+2, which
     // exists only when i+1 <= m and j+1 <= n.
+    //
+    // FIX: Use a single workgroup barrier after ALL seed writes rather than
+    // two separate if-branches with one barrier at the end. The WGSL memory
+    // model does NOT guarantee cross-thread visibility between writes from
+    // lid.x==0 and lid.x==1 without an explicit barrier separating them.
+    // Assigning both cells from lid.x==0 and protecting with one barrier
+    // is the simplest correct pattern (both writes are in the same thread).
     if (lid.x == 0u) {
         diags[0][0] = State(0.0, NEG, NEG);
+        // Diagonal 1, column 0: cell (1, 0) — M = Iy = gap_open + gap_extend
         diags[1][0] = State(params.gap_open + params.gap_extend, NEG, params.gap_open + params.gap_extend);
-    }
-    if (lid.x == 1u) {
+        // Diagonal 1, column 1: cell (0, 1) — M = Ix = gap_open + gap_extend
         diags[1][1] = State(params.gap_open + params.gap_extend, params.gap_open + params.gap_extend, NEG);
     }
     workgroupBarrier();

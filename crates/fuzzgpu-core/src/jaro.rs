@@ -185,9 +185,13 @@ pub fn jaro_winkler_batch(query: &str, candidates: &[&str], p: f64) -> Vec<f64> 
         out.par_chunks_mut(CHUNK).enumerate().for_each(|(ci, chunk_out)| {
             let start = ci * CHUNK;
             let mut k = 0;
+            // Stack-allocated buffer avoids a heap Vec per SIMD group.
+            let mut group_buf: [&[u8]; 8] = [b""; 8];
             while k + w <= chunk_out.len() {
-                let group: Vec<&[u8]> = (0..w).map(|t| candidates[start + k + t].as_bytes()).collect();
-                let res = crate::simd::jaro_width(qb, &group);
+                for t in 0..w {
+                    group_buf[t] = candidates[start + k + t].as_bytes();
+                }
+                let res = crate::simd::jaro_width(qb, &group_buf[..w]);
                 for (lane, score) in res.into_iter().enumerate() {
                     let cand = candidates[start + k + lane];
                     chunk_out[k + lane] = jaro_winkler_apply_boost(query, cand, score, p);
