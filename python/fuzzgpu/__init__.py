@@ -15,6 +15,11 @@ Usage:
     distances = fuzzgpu.levenshtein_batch("hello", ["hallo", "hullo"])
     matrix = fuzzgpu.levenshtein_cdist(["abc", "def"], ["abc", "xyz"])
 
+    # Zero-allocation outputs: write into a preallocated numpy array
+    import numpy as np
+    out = np.empty(len(candidates), dtype=np.uint32)
+    fuzzgpu.levenshtein_batch_into("hello", ["hallo", "hullo"], out)   # fills `out` in place
+
     # Needleman-Wunsch with linear or affine gap penalty
     score = fuzzgpu.needleman_wunsch("AGTACGCA", "TATGC", 2, -1, -2)
     score_affine = fuzzgpu.needleman_wunsch_affine("AGTACGCA", "TATGC", 2, -1, -3, -1)
@@ -34,11 +39,15 @@ from fuzzgpu.fuzzgpu import (
     # Levenshtein
     levenshtein_distance,
     levenshtein_batch,
+    levenshtein_batch_into,
     levenshtein_cdist,
+    levenshtein_cdist_into,
     # Damerau-Levenshtein
     damerau_levenshtein_distance,
     damerau_levenshtein_batch,
+    damerau_levenshtein_batch_into,
     damerau_levenshtein_cdist,
+    damerau_levenshtein_cdist_into,
     damerau_ratio,
     # Needleman-Wunsch
     needleman_wunsch_score,
@@ -49,7 +58,9 @@ from fuzzgpu.fuzzgpu import (
     jaro_similarity,
     jaro_winkler_similarity,
     jaro_winkler_batch_fn,
+    jaro_winkler_batch_into,
     jaro_winkler_cdist,
+    jaro_winkler_cdist_into,
     # Fuzzy matching
     fuzz_ratio,
     fuzz_partial_ratio,
@@ -65,9 +76,11 @@ from fuzzgpu.fuzzgpu import (
     jaro_optimized,
     # Utilities & Control
     set_cpu_only,
+    set_gpu_threshold,
     is_gpu_available,
     warmup,
     gpu_info,
+    hardware_info,
     __version__,
 )
 
@@ -93,14 +106,14 @@ extract_one = fuzz_extract_one
 
 __all__ = [
     # Core API
-    "levenshtein_distance", "levenshtein_batch", "levenshtein_cdist",
-    "damerau_levenshtein_distance", "damerau_levenshtein_batch", "damerau_levenshtein_cdist", "damerau_ratio",
+    "levenshtein_distance", "levenshtein_batch", "levenshtein_batch_into", "levenshtein_cdist", "levenshtein_cdist_into",
+    "damerau_levenshtein_distance", "damerau_levenshtein_batch", "damerau_levenshtein_batch_into", "damerau_levenshtein_cdist", "damerau_levenshtein_cdist_into", "damerau_ratio",
     "needleman_wunsch_score", "needleman_wunsch_batch_fn", "needleman_wunsch_affine", "needleman_wunsch_affine_batch",
-    "jaro_similarity", "jaro_winkler_similarity", "jaro_winkler_batch_fn", "jaro_winkler_cdist",
+    "jaro_similarity", "jaro_winkler_similarity", "jaro_winkler_batch_fn", "jaro_winkler_batch_into", "jaro_winkler_cdist", "jaro_winkler_cdist_into",
     "fuzz_ratio", "fuzz_partial_ratio", "fuzz_token_sort_ratio", "fuzz_token_set_ratio",
     "fuzz_wratio", "fuzz_ratio_batch", "fuzz_extract", "fuzz_extract_one",
     "levenshtein_myers", "needleman_wunsch_striped", "jaro_optimized",
-    "set_cpu_only", "is_gpu_available", "warmup", "gpu_info", "__version__",
+    "set_cpu_only", "set_gpu_threshold", "is_gpu_available", "warmup", "gpu_info", "hardware_info", "__version__",
     # Aliases
     "levenshtein", "damerau_levenshtein", "damerau", "needleman_wunsch", "needleman_wunsch_batch",
     "jaro", "jaro_winkler", "jaro_winkler_batch", "ratio", "partial_ratio",

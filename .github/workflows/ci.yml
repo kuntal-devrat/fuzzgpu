@@ -46,6 +46,63 @@ jobs:
       - name: Run Python Test Suite
         run: pytest tests -v
 
+  simd-arm64:
+    name: SIMD NEON tests (native arm64 runner)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Native arm64 runner: exercises the NEON 2-way Myers/Jaro kernels (and
+      # their differentials against the portable reference) on real hardware;
+      # the AVX512/AVX2 paths are covered by the x86_64 matrix jobs.
+      - name: Run SIMD kernel tests (NEON path)
+        run: cargo test -p fuzzgpu-core --lib simd
+
+  gpu-metal:
+    name: GPU differential tests (Metal backend)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # wgpu's default backend on macOS is Metal, so this job validates that
+      # every WGSL shader compiles and produces CPU-identical results on the
+      # Metal backend (the Linux jobs cover Vulkan via lavapipe).
+      - name: Run GPU differential property tests
+        env:
+          FUZZGPU_REQUIRE_GPU: '1'
+          WGPU_BACKEND: metal
+        run: cargo test -p fuzzgpu-core --test differential
+
+      - name: Run GPU kernel unit tests
+        env:
+          FUZZGPU_REQUIRE_GPU: '1'
+          WGPU_BACKEND: metal
+        run: cargo test -p fuzzgpu-core --lib gpu
+
+  fuzz:
+    name: Fuzz self-harness (stable differential drivers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # The fuzz/ crate is standalone (never built by `--workspace`); the
+      # `--lib` flag skips the `#![no_main]` libFuzzer bins, which cannot be
+      # built as test harnesses. The self-harness drives the same run_* case
+      # drivers over 1500+ deterministic + pseudo-random payloads, asserting
+      # every fast path against its naive oracle — the stable CI surrogate for
+      # the nightly `cargo fuzz run <target>` loop.
+      - name: Run fuzz self-harness
+        run: cargo test --manifest-path fuzz/Cargo.toml --lib --release
+
   gpu-differential:
     name: GPU differential tests (software Vulkan)
     runs-on: ubuntu-latest

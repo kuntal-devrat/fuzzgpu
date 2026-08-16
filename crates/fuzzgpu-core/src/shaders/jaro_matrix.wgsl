@@ -1,6 +1,9 @@
-// fuzzgpu 2D Jaro-Winkler Matrix compute shader
-// Computes cross-product similarity matrix between List A (rows) and List B (cols).
-// Avoids O(N*M) string data replication by storing List A and List B separately.
+// fuzzgpu 2D Jaro-Winkler Matrix compute shader (bitmap matcher, transposed).
+// Computes the cross-product similarity matrix between List A (rows) and
+// List B (cols); one thread per (row, col) cell. Same bitmap matching as the
+// batch kernel (jaro.wgsl), with the transposed layout per axis: chars_a are
+// indexed [i * rows + row], chars_b are [j * cols + col], so threads in a
+// workgroup row read consecutive addresses (coalesced).
 
 struct JaroMatrixParams {
     rows: u32,
@@ -8,12 +11,22 @@ struct JaroMatrixParams {
     winkler_p_bits: u32,
 }
 
-@group(0) @binding(0) var<storage, read> offsets_a: array<u32>;
+@group(0) @binding(0) var<storage, read> len_a: array<u32>;
 @group(0) @binding(1) var<storage, read> chars_a: array<u32>;
-@group(0) @binding(2) var<storage, read> offsets_b: array<u32>;
+@group(0) @binding(2) var<storage, read> len_b: array<u32>;
 @group(0) @binding(3) var<storage, read> chars_b: array<u32>;
 @group(0) @binding(4) var<storage, read_write> matrix: array<u32>;
 @group(0) @binding(5) var<uniform> params: JaroMatrixParams;
+
+fn bit_test(mb: vec4<u32>, j: u32) -> bool {
+    return ((mb[j >> 5u] >> (j & 31u)) & 1u) != 0u;
+}
+
+fn bit_set(mb: vec4<u32>, j: u32) -> vec4<u32> {
+    var v = mb;
+    v[j >> 5u] = v[j >> 5u] | (1u << (j & 31u));
+    return v;
+}
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -26,13 +39,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let out_idx = row * params.cols + col;
 
-    let a_start = offsets_a[row];
-    let a_end = offsets_a[row + 1u];
-    let a_len = a_end - a_start;
-
-    let b_start = offsets_b[col];
-    let b_end = offsets_b[col + 1u];
-    let b_len = b_end - b_start;
+    let a_len = len_a[row];
+    let b_len = len_b[col];
 
     // Edge cases
     if (a_len == 0u && b_len == 0u) {
@@ -50,18 +58,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Match distance
     let half = max(a_len, b_len) / 2u;
     var match_distance = 0u;
     if (half > 0u) {
         match_distance = half - 1u;
     }
 
-    var a_matched: array<u32, 129>;
-    var b_matched: array<u32, 129>;
-    for (var i = 0u; i < a_len; i++) { a_matched[i] = 0u; }
-    for (var i = 0u; i < b_len; i++) { b_matched[i] = 0u; }
-
+    var matched_b = vec4<u32>(0u);
+    var matched_a = vec4<u32>(0u);
     var matches = 0u;
 
     for (var i = 0u; i < a_len; i++) {
@@ -70,13 +74,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             lo = i - match_distance;
         }
         let hi = min(i + match_distance + 1u, b_len);
-        let ai = chars_a[a_start + i];
+        let ai = chars_a[i * params.rows + row];
 
         for (var j = lo; j < hi; j++) {
-            if (b_matched[j] != 0u) { continue; }
-            if (ai != chars_b[b_start + j]) { continue; }
-            a_matched[i] = 1u;
-            b_matched[j] = 1u;
+            if (bit_test(matched_b, j)) { continue; }
+            if (ai != chars_b[j * params.cols + col]) { continue; }
+            matched_b = bit_set(matched_b, j);
+            matched_a = bit_set(matched_a, i);
             matches += 1u;
             break;
         }
@@ -90,9 +94,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var transpositions = 0u;
     var k = 0u;
     for (var i = 0u; i < a_len; i++) {
-        if (a_matched[i] == 0u) { continue; }
-        while (b_matched[k] == 0u) { k += 1u; }
-        if (chars_a[a_start + i] != chars_b[b_start + k]) {
+        if (!bit_test(matched_a, i)) { continue; }
+        while (!bit_test(matched_b, k)) { k += 1u; }
+        if (chars_a[i * params.rows + row] != chars_b[k * params.cols + col]) {
             transpositions += 1u;
         }
         k += 1u;
@@ -104,20 +108,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let t_f = f32(transpositions);
     let jaro = (m_f / a_f + m_f / b_f + (m_f - t_f / 2.0) / m_f) / 3.0;
 
-    // Winkler prefix bonus (standard Winkler 1990: only when jaro >= 0.7)
     var jw = jaro;
     if (jaro >= 0.7) {
         let p = bitcast<f32>(params.winkler_p_bits);
         var prefix_len = 0u;
         let max_prefix = min(min(a_len, b_len), 4u);
         for (var i = 0u; i < max_prefix; i++) {
-            if (chars_a[a_start + i] == chars_b[b_start + i]) {
+            if (chars_a[i * params.rows + row] == chars_b[i * params.cols + col]) {
                 prefix_len += 1u;
             } else {
                 break;
             }
         }
-        jw = jaro + f32(prefix_len) * p * (1.0 - jaro);
+        jw = min(jaro + f32(prefix_len) * p * (1.0 - jaro), 1.0);
     }
     matrix[out_idx] = bitcast<u32>(jw);
 }

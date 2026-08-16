@@ -10,7 +10,7 @@
 
 [![PyPI Version](https://img.shields.io/badge/pypi-v0.1.4-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg?style=flat-square)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg?style=flat-square)](https://www.rust-lang.org)
 [![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
 [![Release wasm package](https://github.com/kuntal-devrat/fuzzgpu/actions/workflows/wasm-release.yml/badge.svg)](https://github.com/kuntal-devrat/fuzzgpu/actions/workflows/wasm-release.yml)
 
@@ -34,33 +34,91 @@ No NVIDIA CUDA drivers or complex toolkits required.
 
 ## Benchmark Results
 
-*Hardware: Intel(R) Iris(R) Xe Graphics (Vulkan) / Intel Core i7 CPU*
+*Hardware: Intel(R) Iris(R) Xe Graphics (Vulkan) + Intel Core i7 (Rayon uses all cores)*
+*Versions: fuzzgpu 0.1.4 (release) · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
+*Method: median of 7 runs after a warmup call, one full library call per measurement.
+Reproduce with `python benchmarks/bench_compare.py`.*
 
-### 1. Damerau-Levenshtein Batch (1 Query × N Candidates)
-| Batch Size | `fuzzgpu` | `rapidfuzz` | `python-Levenshtein` | Speedup vs RapidFuzz |
-| :--- | :---: | :---: | :---: | :---: |
-| **100** | **0.21 ms** | 0.36 ms | N/A | **1.74×** |
-| **1,000** | **0.96 ms** | 3.72 ms | N/A | **3.88×** |
-| **5,000** | **3.67 ms** | 18.44 ms | N/A | **5.02×** |
-| **10,000** | **5.95 ms** | 37.46 ms | N/A | **6.30×** |
-| **50,000** | **31.74 ms** | 85.87 ms | N/A | **2.71×** |
+> **How to read these tables.** `fuzzgpu`'s CPU path is multi-threaded (Rayon)
+> and uses the **Myers (1999) bit-vector** for ASCII pairs with a ≤ 64-char
+> pattern (only the *pattern* must be short — the text can be any length),
+> amplified by width-aware SIMD kernels — **AVX512** (8 texts/vector),
+> **AVX2** (4), **NEON** (2), portable fallback — for Levenshtein *and*
+> Jaro (bit-parallel matching-window pass). This is why the Levenshtein and
+> Jaro-Winkler CPU numbers below *beat* rapidfuzz's C++/SIMD at scale, and
+> Damerau (unrestricted Lowrance-Wagner) crushes it. The Python bindings are
+> **zero-copy** (`abi3-py310` + pyo3 `Bound<str>` views — no `Vec<String>`
+> copies per call).
+>
+> **GPU kernels exist for every metric.** Levenshtein uses the Myers bit-vector
+> shader (shared Peq per workgroup, two-u32 bit-vector so no `SHADER_INT64`
+> is needed) plus a **row-wise Myers cdist kernel** (~10× faster than the old
+> DP matrix shader). Jaro-Winkler has a **bitmap-matching shader** (128-bit
+> bitmaps in registers, transposed pair-major char layout for coalesced
+> loads). Damerau has a **Lowrance-Wagner shader** that keeps each pair's full
+> DP matrix in workgroup shared memory (bit-exact with the CPU reference,
+> including non-adjacent transpositions like `ca`/`abc` = 2).
+>
+> **Routing is metric-aware and backend-aware.** The GPU carries a per-dispatch
+> sync round-trip (~1 ms on an iGPU), and the Jaro/Damerau kernels are
+> heavier per pair than Myers — measured on Iris Xe they lose to the SIMD CPU
+> path at *every* scale (Jaro ~2×, Damerau ~6× at 50k pairs). Auto-routing
+> therefore never sends them to an integrated GPU (the "GPU" columns below
+> are the auto-routed result, i.e. the fast CPU path); on discrete GPUs they
+> dispatch above a scaled threshold (Jaro ≥ 1,024 pairs, Damerau ≥ 2,048).
+> Levenshtein's Myers kernel is cheap enough per pair to win on iGPUs at
+> scale and is routed normally. `hardware_info()` shows the adapter class,
+> auto threshold, and how many pairs actually went to the GPU;
+> `set_gpu_threshold(n)` overrides any of it. These tables replace the
+> v0.1.0 numbers, which were not reproducible: they compared against
+> pure-Python loops and timed single un-warmed calls.
 
-### 2. Levenshtein Cross-Product Matrix (`cdist` $N \times M$)
-*Utilizing dedicated 2D Grid Workgroup Shaders with $O(N + M)$ memory bandwidth:*
-| Matrix Size | Total Pairs | `fuzzgpu` | `rapidfuzz` | `python-Levenshtein` | Speedup vs RF | Speedup vs py-Lev |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **10 × 10** | 100 | **0.04 ms** | 0.04 ms | 0.05 ms | 1.00× | **1.31×** |
-| **50 × 50** | 2,500 | **2.22 ms** | 0.71 ms | 0.99 ms | 0.32× | 0.45× |
-| **100 × 100** | 10,000 | **5.29 ms** | 3.51 ms | 4.03 ms | 0.66× | 0.76× |
-| **200 × 200** | 40,000 | **15.05 ms** | 33.58 ms | 46.82 ms | **2.23×** | **3.11×** |
+### 1. Levenshtein Batch (1 query × N candidates, 10-char strings)
+| Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **100** | 0.12 ms | 0.01 ms | 0.03 ms | 0.25× | 2.21× |
+| **1,000** | 0.83 ms | 0.09 ms | 0.15 ms | 0.18× | 1.67× |
+| **10,000** | 2.60 ms | 0.87 ms | 1.47 ms | 0.57× | 1.68× |
+| **50,000** | 9.92 ms | 5.04 ms | 6.38 ms | 0.64× | 1.27× |
 
-### 3. Jaro-Winkler Similarity Batch
-| Batch Size | `fuzzgpu` | `rapidfuzz` | `python-Levenshtein` | Speedup vs RapidFuzz |
-| :--- | :---: | :---: | :---: | :---: |
-| **1,000** | **3.10 ms** | 0.81 ms | 1.13 ms | 0.26× |
-| **5,000** | **6.56 ms** | 5.12 ms | 5.78 ms | 0.78× |
-| **10,000** | **8.56 ms** | 7.80 ms | 9.17 ms | 0.91× |
-| **50,000** | **33.24 ms** | 47.11 ms | 24.86 ms | **1.42×** |
+### 2. Damerau-Levenshtein Batch
+*Unrestricted Lowrance-Wagner (non-adjacent transpositions included, unlike
+rapidfuzz's optimal-string-alignment). The GPU kernel exists and is
+bit-exact, but on this iGPU auto-routing sends it to the CPU path (the GPU
+column is the auto-routed result).*
+| Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **100** | 0.10 ms | 0.06 ms | 0.14 ms | 1.43× | 2.18× |
+| **1,000** | 0.58 ms | 0.40 ms | 1.63 ms | 2.81× | 4.06× |
+| **10,000** | 2.95 ms | 2.15 ms | 20.86 ms | 7.06× | 9.70× |
+| **50,000** | 17.49 ms | 12.08 ms | 120.25 ms | 6.88× | 9.95× |
+
+### 3. Jaro-Winkler Batch (p = 0.1)
+*GPU bitmap-matching kernel exists; on this iGPU auto-routing sends it to the
+SIMD CPU path (the GPU column is the auto-routed result).*
+| Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **100** | 0.01 ms | 0.01 ms | 0.01 ms | 1.06× | 1.13× |
+| **1,000** | 0.11 ms | 0.10 ms | 0.10 ms | 0.95× | 0.99× |
+| **10,000** | 1.50 ms | 1.68 ms | 1.72 ms | 1.15× | 1.02× |
+| **50,000** | 10.96 ms | 14.34 ms | 15.62 ms | 1.43× | 1.09× |
+
+### 4. Needleman-Wunsch Batch (affine, match=1, mismatch=-1, gap_open=-2, gap_extend=-1)
+*rapidfuzz has no affine-gap Needleman-Wunsch scorer, so no comparison column.*
+| Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) |
+| :--- | :---: | :---: |
+| **100** | 0.30 ms | 0.21 ms |
+| **1,000** | 1.02 ms | 1.24 ms |
+| **10,000** | 7.16 ms | 4.39 ms |
+| **50,000** | 20.82 ms | 19.09 ms |
+
+### 5. Levenshtein Cross-Product Matrix (`cdist`)
+| Matrix Size | Total Pairs | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | python-Levenshtein | vs RF (GPU) | vs RF (CPU) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **10 × 10** | 100 | 0.06 ms | 0.03 ms | 0.01 ms | 0.05 ms | 0.12× | 0.22× |
+| **50 × 50** | 2,500 | 0.61 ms | 0.11 ms | 0.04 ms | 1.20 ms | 0.07× | 0.38× |
+| **100 × 100** | 10,000 | 0.81 ms | 0.28 ms | 0.25 ms | 6.69 ms | 0.31× | 0.90× |
+| **200 × 200** | 40,000 | 1.56 ms | 1.56 ms | 1.13 ms | 41.35 ms | 0.73× | 0.73× |
 
 ---
 
@@ -98,6 +156,20 @@ jw_scores  = fuzzgpu.jaro_winkler_batch("hello", candidates, prefix_weight=0.1)
 # 3. 2D Cross-Product Distance Matrix (Dedicated 2D Grid Shader)
 matrix = fuzzgpu.levenshtein_cdist(["abc", "def", "xyz"], ["abd", "axy", "def"])
 
+# 3b. Zero-Allocation Outputs (write into preallocated numpy buffers — the
+#     rapidfuzz binding model: no per-call Python int boxing, no GC churn)
+import numpy as np
+out_u32  = np.empty(len(candidates), dtype=np.uint32)
+out_f64  = np.empty(len(candidates), dtype=np.float64)
+mat_u32  = np.empty((3, 3), dtype=np.uint32)
+fuzzgpu.levenshtein_batch_into("hello", candidates, out_u32)        # fills in place
+fuzzgpu.jaro_winkler_batch_into("hello", candidates, out_f64)      # jaro/winkler: float64
+fuzzgpu.levenshtein_cdist_into(["abc", "def", "xyz"], ["abd", "axy", "def"], mat_u32)
+# Supported: levenshtein/damerau/jaro batch + cdist. `out` must be a numpy
+# array of the exact shape/dtype (uint32 for distances, float64 for Jaro);
+# it is validated (length, dtype, writable, contiguous) before any compute,
+# and left untouched if validation fails.
+
 # 4. Global Sequence Alignment (Gotoh 1982 Linear & Affine Gap Penalties)
 score_linear = fuzzgpu.needleman_wunsch_score("AGTACGCA", "TATGC", match=2, mismatch=-1, gap=-2)
 score_affine = fuzzgpu.needleman_wunsch_affine("AGTACGCA", "TATGC", match=2, mismatch=-1, gap_open=-3, gap_extend=-1)
@@ -117,6 +189,16 @@ top_3 = extract("apple", ["apply", "ape", "banana", "applesauce"], score_cutoff=
 # 7. Hardware Diagnostics
 print(fuzzgpu.gpu_info())
 # Output: Intel(R) Iris(R) Xe Graphics (Vulkan) / Apple M2 (Metal)
+
+# Full routing diagnostics: adapter class, auto threshold, last routing.
+print(fuzzgpu.hardware_info())
+# Output: GPU: Intel(R) Iris(R) Xe Graphics (Vulkan, IntegratedGpu) |
+#         auto threshold: 500 | override: auto | last routing: 50000 GPU / 0 CPU pairs | ...
+
+# GPU/CPU routing is backend-aware by default (discrete GPUs route earlier;
+# integrated and software GPUs are conservative). Override it explicitly:
+fuzzgpu.set_gpu_threshold(100)   # force GPU dispatch for batches >= 100 pairs
+fuzzgpu.set_gpu_threshold(None)  # restore auto-selection from the adapter
 ```
 
 ---
@@ -319,8 +401,17 @@ needleman_wunsch(long, long, 30_000_000n, -1n, -2n);
 
 ### Key Architectural Optimizations
 
-1. **2D Grid Matrix Shaders (`levenshtein_matrix.wgsl` & `jaro_matrix.wgsl`)**:
-   Instead of duplicating string pairs across PCIe ($O(N \cdot M)$ transfers), List A and List B are uploaded once ($O(N + M)$ memory bandwidth). Workgroups execute on a 2D grid (`@workgroup_size(16, 16)`).
+1. **GPU kernels for every metric**: Levenshtein runs the Myers bit-vector
+   shader (`levenshtein_myers.wgsl`, two-u32 bit-vector, no `SHADER_INT64`)
+   plus a row-wise Myers cdist kernel (`levenshtein_cdist_myers.wgsl`);
+   Jaro-Winkler runs a bitmap-matching shader (`jaro.wgsl` / `jaro_matrix.wgsl`
+   — 128-bit register bitmaps, transposed pair-major char layout for
+   coalesced loads, no per-thread arrays); Damerau runs a Lowrance-Wagner
+   shader (`damerau.wgsl` / `damerau_matrix.wgsl`) that keeps each pair's full
+   DP matrix in workgroup shared memory, bit-exact with the CPU reference
+   including non-adjacent transpositions (`ca`/`abc` = 2). Matrix shaders
+   upload List A and List B once ($O(N + M)$ bandwidth) instead of
+   duplicating pairs across PCIe.
 2. **Myers (1999) Bit-Parallel CPU Engine**:
    For strings $\le 64$ characters, computes Levenshtein edit distance using bit-vector operations with zero inner dynamic programming loops ($O(N)$ execution).
 3. **Lowrance & Wagner (1975) Unrestricted Damerau-Levenshtein**:
@@ -329,6 +420,10 @@ needleman_wunsch(long, long, 30_000_000n, -1n, -2n);
    Memory-efficient 3-state recurrence ($O(N)$ auxiliary space) for bioinformatics and long-sequence alignment.
 5. **Streaming Chunk Partitioner**:
    Datasets exceeding GPU buffer limits (>128MB or >500,000 pairs) are automatically streamed in chunks to prevent VRAM overflow.
+6. **Metric-Aware Backend Routing**:
+   The Myers kernel wins on iGPUs at scale and is routed at the auto threshold; the heavier Jaro/Damerau kernels are auto-routed to CPU on integrated GPUs (measured 2–6× slower there at every scale) and to GPU on discrete GPUs above a scaled threshold. `hardware_info()` reports every routing decision; `set_gpu_threshold(n)` overrides.
+7. **ISA-Aware SIMD Kernels (Levenshtein Myers & Jaro)**:
+   The bit-parallel kernels dispatch at runtime to the widest available instruction set — **AVX512** (8 texts per 512-bit vector), **AVX2** (4 texts per 256-bit vector), **NEON** on aarch64 (2 texts per 128-bit vector), or a portable scalar fallback. Every kernel is differentially tested against the portable reference (AVX512/AVX2 on x86 CI, NEON on a native arm64 CI runner). To pin a specific ISA (e.g. to work around a 512-bit downclocking part, or for benchmarking) set `FUZZGPU_SIMD=portable|neon|avx2|avx512`. The GPU shaders are backend-agnostic WGSL (no `u64`, no adapter features) and run on Vulkan, Metal, DX12, and WebGPU.
 
 ---
 
@@ -364,8 +459,8 @@ fuzzgpu/
 ## Building from Source
 
 ### Prerequisites
-- [Rust Toolchain (1.75+)](https://rustup.rs/)
-- Python 3.8+ & `pip install maturin`
+- [Rust Toolchain (1.87+)](https://rustup.rs/) (wgpu 30 MSRV)
+- Python 3.10+ & `pip install maturin`
 
 ### Build Python Extension
 ```bash
@@ -385,6 +480,15 @@ pytest tests/ -v
 # Run comparative benchmark harness
 python benchmarks/bench_compare.py
 ```
+
+### Fuzz Testing
+
+The `fuzz/` crate holds libFuzzer targets (nightly + `cargo fuzz run <target>`)
+for Levenshtein, Jaro, Needleman-Wunsch, and the fuzzy ratios, each asserting
+its fast path against a naive oracle. The same drivers run on **stable** via a
+self-harness — `cargo test --manifest-path fuzz/Cargo.toml --lib --release` —
+which is wired into CI, so the differential fuzz checks execute on every push
+without a nightly toolchain.
 
 GPU test writers: see [docs/GPU_TESTING.md](docs/GPU_TESTING.md) for the fault-injection hooks (timeout / buffer / shader-error branches) and the dispatch-lock, skip, and CI conventions every GPU test must follow.
 

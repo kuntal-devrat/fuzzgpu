@@ -168,11 +168,18 @@ pub mod gpu_ext {
     use super::*;
     use bytemuck::{Pod, Zeroable};
     use std::sync::OnceLock;
-    use wgpu::util::DeviceExt;
-    use crate::gpu::{FuzzGpuError, GpuEngine, Result};
+    use crate::gpu::{
+        BufferPool, FuzzGpuError, GpuEngine, Result, SLOT_CHARS_A, SLOT_CHARS_B, SLOT_OFFSETS_A,
+        SLOT_OFFSETS_B, SLOT_PARAMS, SLOT_RESULTS, SLOT_STAGING,
+    };
 
     const SHADER_SRC: &str = include_str!("shaders/needleman_affine.wgsl");
-    const GPU_THRESHOLD: usize = 500;
+    // Anti-diagonal wavefront kernel (one workgroup per pair, all cells of a
+    // diagonal in parallel — see shaders/needleman_wavefront.wgsl). Kept as an
+    // explicit API + differential-tested, but NOT the default routing: on an
+    // iGPU the per-pair barrier cost makes it ~140x slower than the serial
+    // shader for batches (see [`GpuNeedlemanAffineKernel::compute_gpu_wavefront`]).
+    const WAVEFRONT_SHADER_SRC: &str = include_str!("shaders/needleman_wavefront.wgsl");
     const GPU_MAX_STRING_LEN: usize = 128;
     const MAX_DISPATCH: u32 = 65535;
     const MAX_DESIRED_CHUNK_PAIRS: usize = 500_000;
@@ -196,7 +203,11 @@ pub mod gpu_ext {
     pub struct GpuNeedlemanAffineKernel {
         engine: std::sync::Arc<GpuEngine>,
         pipeline: wgpu::ComputePipeline,
+        wavefront_pipeline: wgpu::ComputePipeline,
         bind_group_layout: wgpu::BindGroupLayout,
+        // Persistent buffer arena (see gpu::BufferPool) — removes the per-call
+        // `create_buffer` cost that dominated small-batch dispatches.
+        pool: std::sync::Mutex<BufferPool>,
     }
 
     static GLOBAL_GPU_KERNEL: OnceLock<GpuNeedlemanAffineKernel> = OnceLock::new();
@@ -235,7 +246,12 @@ pub mod gpu_ext {
                 &crate::gpu::effective_shader_source(SHADER_SRC),
                 &layout,
             )?;
-            Ok(Self { engine, pipeline, bind_group_layout })
+            let wavefront_pipeline = engine.build_compute_pipeline(
+                "needleman-affine wavefront pipeline",
+                &crate::gpu::effective_shader_source(WAVEFRONT_SHADER_SRC),
+                &layout,
+            )?;
+            Ok(Self { engine, pipeline, wavefront_pipeline, bind_group_layout, pool: std::sync::Mutex::new(BufferPool::new()) })
         }
 
         /// GPU/CPU batch for affine-gap Needleman-Wunsch (Gotoh).
@@ -243,8 +259,17 @@ pub mod gpu_ext {
         /// Strings up to `GPU_MAX_STRING_LEN` (128) chars run on the GPU
         /// shader; longer ones route to the CPU implementation. Scores are f32
         /// on the GPU (WGSL has no i64) and exact for the practical scoring
-        /// ranges — see the shader note. Below `GPU_THRESHOLD` pairs the whole
-        /// batch routes to CPU, mirroring the Levenshtein kernel.
+        /// ranges — see the shader note. Below the engine's (auto or user-set)
+        /// threshold the whole batch routes to CPU, mirroring the Levenshtein
+        /// kernel.
+        ///
+        /// The general shader serves the whole <= 128-char range. An
+        /// anti-diagonal wavefront kernel exists (see
+        /// [`Self::compute_gpu_wavefront`]) but is NOT the default: measured on
+        /// an iGPU it loses ~140x to the serial shader because per-pair
+        /// workgroup barriers (~m+n per pair) dominate — the parallelism in
+        /// fuzzy-matching batches is *across* thousands of independent pairs,
+        /// which the serial shader (one thread per pair) already exploits.
         pub fn compute_batch(
             &self,
             pairs: &[(&str, &str)],
@@ -253,6 +278,8 @@ pub mod gpu_ext {
             gap_open: i64,
             gap_extend: i64,
         ) -> Result<Vec<i64>> {
+            // Serialize GPU dispatch across threads (gfx-rs/wgpu#10085).
+            let _dispatch = self.engine.dispatch_lock();
             let n = pairs.len();
             if n == 0 { return Ok(vec![]); }
 
@@ -277,7 +304,9 @@ pub mod gpu_ext {
                 }
             }
 
-            if gpu_indices.is_empty() || gpu_indices.len() < GPU_THRESHOLD {
+            if gpu_indices.is_empty() || gpu_indices.len() < self.engine.effective_gpu_threshold() {
+                // Below the (auto or user-set) threshold: CPU is cheaper.
+                crate::gpu::GpuEngine::record_routing(0, n);
                 let cpu_results: Vec<i64> = gpu_indices.par_iter()
                     .map(|&i| needleman_wunsch_affine(pairs[i].0, pairs[i].1, match_score, mismatch_score, gap_open, gap_extend))
                     .collect();
@@ -286,6 +315,7 @@ pub mod gpu_ext {
                 }
                 return Ok(results);
             }
+            crate::gpu::GpuEngine::record_routing(gpu_indices.len(), cpu_indices.len());
 
             // Chunk sizing from device limits, mirroring the Levenshtein kernel.
             let max_allowed_binding = self.engine.max_storage_buffer_binding_size as usize;
@@ -354,39 +384,34 @@ pub mod gpu_ext {
                 ));
             }
 
-            let buf_offsets_a = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("oa"), contents: bytemuck::cast_slice(&offsets_a),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-            let buf_chars_a = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ca"), contents: bytemuck::cast_slice(&chars_a),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-            let buf_offsets_b = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ob"), contents: bytemuck::cast_slice(&offsets_b),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-            let buf_chars_b = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("cb"), contents: bytemuck::cast_slice(&chars_b),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-            let buf_results = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("res"),
-                size: results_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-            let buf_staging = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("stg"),
-                size: results_size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            // Persistent buffers (see gpu::BufferPool) — same arena pattern as
+            // the other kernels: ensure capacity, upload once, reuse.
+            let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
+            let offsets_bytes = ((offsets_a.len() * 4) as u64).max(results_size);
+            pool.ensure(&self.engine.device, SLOT_OFFSETS_A, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "oa");
+            pool.ensure(&self.engine.device, SLOT_OFFSETS_B, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "ob");
+            pool.ensure(&self.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "ca");
+            pool.ensure(&self.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "cb");
+            pool.ensure(&self.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "res");
+            pool.ensure(&self.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "stg");
+            pool.ensure(&self.engine.device, SLOT_PARAMS, std::mem::size_of::<Params>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "p");
 
-            let mut encoder = self.engine.device.create_command_encoder(
-                &wgpu::CommandEncoderDescriptor { label: Some("affine enc") },
-            );
+            pool.write(&self.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&offsets_a));
+            pool.write(&self.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
+            pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&offsets_b));
+            pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
 
+            let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
+            let buf_chars_a = pool.get(SLOT_CHARS_A);
+            let buf_offsets_b = pool.get(SLOT_OFFSETS_B);
+            let buf_chars_b = pool.get(SLOT_CHARS_B);
+            let buf_results = pool.get(SLOT_RESULTS);
+            let buf_staging = pool.get(SLOT_STAGING);
+            let buf_params = pool.get(SLOT_PARAMS);
+
+            // Per-chunk submit + readback (see the Levenshtein kernel: one
+            // shared submit would give every dispatch the LAST chunk's offset).
+            let mut gpu_results: Vec<f32> = Vec::with_capacity(batch_size as usize);
             let mut remaining = batch_size;
             let mut offset = 0u32;
             while remaining > 0 {
@@ -401,13 +426,7 @@ pub mod gpu_ext {
                     gap_extend: gap_extend as f32,
                     _pad: 0,
                 };
-                let buf_params = self.engine.device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("p"),
-                        contents: bytemuck::bytes_of(&params),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    },
-                );
+                pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
                 let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: None,
@@ -422,6 +441,9 @@ pub mod gpu_ext {
                     ],
                 });
 
+                let mut encoder = self.engine.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("affine enc") },
+                );
                 let workgroups = (chunk + 15) / 16;
                 {
                     let mut pass = encoder.begin_compute_pass(
@@ -431,29 +453,401 @@ pub mod gpu_ext {
                     pass.set_bind_group(0, &bg, &[]);
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
+                let chunk_bytes = (chunk as u64) * 4;
+                encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
+                let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
+                gpu_results.extend_from_slice(bytemuck::cast_slice(&bytes));
+
+                remaining -= chunk;
+                offset += chunk;
+            }
+            Ok(gpu_results)
+        }
+
+        /// Anti-diagonal wavefront dispatch for 65..=128-char pairs
+        /// (needleman_wavefront.wgsl): one workgroup per pair, cells of each
+        /// diagonal computed in parallel, O(m+n) sequential steps instead of
+        /// O(m*n) on a single thread.
+        ///
+        /// Pairs are packed with the standard offsets+chars layout (identical
+        /// to the general shader), so the same bind group layout serves both
+        /// pipelines. Chunks beyond MAX_DISPATCH workgroups get their own
+        /// submit+readback (each chunk's params buffer must be written before
+        /// its own submission — the shared pool slot cannot hold two offsets
+        /// for two dispatches in one encoder).
+        /// Anti-diagonal wavefront dispatch for 65..=128-char pairs
+        /// (needleman_wavefront.wgsl): one workgroup per pair, cells of each
+        /// diagonal computed in parallel, O(m+n) sequential steps instead of
+        /// O(m*n) on a single thread.
+        ///
+        /// Exposed explicitly (not the default routing) so advanced callers can
+        /// opt in and the correctness differential can pin it against the CPU
+        /// Gotoh oracle. Measured reality on an Intel iGPU: the ~m+n
+        /// workgroup barriers per pair cost ~140x more than the serial shader
+        /// for 1000 x 80-char pairs, because batch parallelism comes from
+        /// thousands of independent pairs, not from intra-pair diagonals.
+        #[doc(hidden)]
+        pub fn compute_gpu_wavefront(
+            &self,
+            pairs: &[(&str, &str)],
+            indices: &[usize],
+            match_score: i64,
+            mismatch_score: i64,
+            gap_open: i64,
+            gap_extend: i64,
+        ) -> Result<Vec<f32>> {
+            let batch_size = indices.len() as u32;
+            if batch_size == 0 {
+                return Ok(vec![]);
+            }
+
+            let mut offsets_a: Vec<u32> = Vec::with_capacity(indices.len() + 1);
+            let mut chars_a: Vec<u32> = Vec::new();
+            let mut offsets_b: Vec<u32> = Vec::with_capacity(indices.len() + 1);
+            let mut chars_b: Vec<u32> = Vec::new();
+            offsets_a.push(0);
+            offsets_b.push(0);
+
+            for &i in indices {
+                let (a, b) = pairs[i];
+                chars_a.extend(a.chars().map(|c| c as u32));
+                offsets_a.push(chars_a.len() as u32);
+                chars_b.extend(b.chars().map(|c| c as u32));
+                offsets_b.push(chars_b.len() as u32);
+            }
+
+            if chars_a.is_empty() { chars_a.push(0); }
+            if chars_b.is_empty() { chars_b.push(0); }
+
+            let chars_a_bytes = (chars_a.len() * 4) as u64;
+            let chars_b_bytes = (chars_b.len() * 4) as u64;
+            let results_size = (batch_size as u64) * 4;
+            let limit = self.engine.max_buffer_size_effective();
+            if chars_a_bytes > limit || chars_b_bytes > limit || results_size > limit {
+                return Err(FuzzGpuError::BufferError(
+                    "Wavefront buffer size exceeds device max_buffer_size".into(),
+                ));
+            }
+
+            let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
+            let offsets_bytes = ((offsets_a.len() * 4) as u64).max(results_size);
+            pool.ensure(&self.engine.device, SLOT_OFFSETS_A, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "wfoa");
+            pool.ensure(&self.engine.device, SLOT_OFFSETS_B, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "wfob");
+            pool.ensure(&self.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "wfca");
+            pool.ensure(&self.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "wfcb");
+            pool.ensure(&self.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "wfres");
+            pool.ensure(&self.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "wfstg");
+            pool.ensure(&self.engine.device, SLOT_PARAMS, std::mem::size_of::<Params>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "wfprm");
+
+            pool.write(&self.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&offsets_a));
+            pool.write(&self.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
+            pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&offsets_b));
+            pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+
+            let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
+            let buf_chars_a = pool.get(SLOT_CHARS_A);
+            let buf_offsets_b = pool.get(SLOT_OFFSETS_B);
+            let buf_chars_b = pool.get(SLOT_CHARS_B);
+            let buf_results = pool.get(SLOT_RESULTS);
+            let buf_params = pool.get(SLOT_PARAMS);
+
+            let mut out: Vec<f32> = Vec::with_capacity(batch_size as usize);
+            let mut remaining = batch_size;
+            let mut offset = 0u32;
+
+            // Each chunk: fresh params write -> own encoder -> own readback.
+            while remaining > 0 {
+                let chunk = remaining.min(MAX_DISPATCH);
+                let params = Params {
+                    batch_size,
+                    max_len: GPU_MAX_STRING_LEN as u32,
+                    offset,
+                    match_score: match_score as f32,
+                    mismatch_score: mismatch_score as f32,
+                    gap_open: gap_open as f32,
+                    gap_extend: gap_extend as f32,
+                    _pad: 0,
+                };
+                pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
+
+                let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 4, resource: buf_results.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
+                    ],
+                });
+
+                let mut encoder = self.engine.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("wavefront enc") },
+                );
+                {
+                    let mut pass = encoder.begin_compute_pass(
+                        &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
+                    );
+                    pass.set_pipeline(&self.wavefront_pipeline);
+                    pass.set_bind_group(0, &bg, &[]);
+                    pass.dispatch_workgroups(chunk, 1, 1);
+                }
+                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, results_size);
+                let bytes = self.engine.readback(encoder, &pool, results_size)?;
+                let flat: &[f32] = bytemuck::cast_slice(&bytes);
+                out.extend_from_slice(&flat[..chunk as usize]);
+
+                remaining -= chunk;
+                offset += chunk;
+            }
+            Ok(out)
+        }
+
+        /// Create a batched dispatch: enqueue several pair-lists, then
+        /// [`GpuNeedlemanAffineBatch::execute`] once. All GPU-eligible pairs
+        /// across every enqueued op share one command encoder and one readback,
+        /// amortizing the per-call sync round-trip. Scoring parameters are fixed
+        /// for the whole batch, matching [`Self::compute_batch`].
+        pub fn batch(
+            &self,
+            match_score: i64,
+            mismatch_score: i64,
+            gap_open: i64,
+            gap_extend: i64,
+        ) -> GpuNeedlemanAffineBatch<'_> {
+            GpuNeedlemanAffineBatch {
+                kernel: self,
+                match_score,
+                mismatch_score,
+                gap_open,
+                gap_extend,
+                ops: Vec::new(),
+            }
+        }
+    }
+
+    /// A queued set of affine Needleman-Wunsch batch operations executed with a
+    /// single GPU dispatch + readback. Each enqueued op returns its own
+    /// `Vec<i64>` of scores, with the same semantics as
+    /// [`GpuNeedlemanAffineKernel::compute_batch`] (f32 GPU precision, sentinel
+    /// recompute) applied per op.
+    pub struct GpuNeedlemanAffineBatch<'k> {
+        kernel: &'k GpuNeedlemanAffineKernel,
+        match_score: i64,
+        mismatch_score: i64,
+        gap_open: i64,
+        gap_extend: i64,
+        ops: Vec<Vec<(&'k str, &'k str)>>,
+    }
+
+    impl<'k> GpuNeedlemanAffineBatch<'k> {
+        /// Enqueue one operation (a list of pairs) into this batch.
+        pub fn add(&mut self, pairs: &[(&'k str, &'k str)]) {
+            self.ops.push(pairs.to_vec());
+        }
+
+        /// Number of enqueued operations.
+        pub fn len(&self) -> usize {
+            self.ops.len()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.ops.is_empty()
+        }
+
+        /// Execute all enqueued operations in one dispatch + readback, returning
+        /// one result vector per op.
+        pub fn execute(self) -> Result<Vec<Vec<i64>>> {
+            // Serialize GPU dispatch across threads (gfx-rs/wgpu#10085).
+            let _dispatch = self.kernel.engine.dispatch_lock();
+            let n_ops = self.ops.len();
+            if n_ops == 0 {
+                return Ok(vec![]);
+            }
+
+            // Classify + pack every pair across ops (mirrors compute_batch:
+            // only >128-char pairs route to CPU; no empty/identical
+            // short-circuits — the shader handles all lengths <= 128).
+            let mut out: Vec<Vec<i64>> = Vec::with_capacity(n_ops);
+            let mut gpu_ranges: Vec<(u32, u32)> = Vec::with_capacity(n_ops);
+            let mut op_gpu_to_pair: Vec<Vec<usize>> = Vec::with_capacity(n_ops);
+            let mut cpu_oversized: Vec<(usize, usize)> = Vec::new();
+            let mut offsets_a: Vec<u32> = vec![0];
+            let mut chars_a: Vec<u32> = Vec::new();
+            let mut offsets_b: Vec<u32> = vec![0];
+            let mut chars_b: Vec<u32> = Vec::new();
+            let mut gpu_global: u32 = 0;
+
+            for (op_i, pairs) in self.ops.iter().enumerate() {
+                let op_results = vec![0i64; pairs.len()];
+                let mut op_gpu: Vec<usize> = Vec::new();
+                for (j, (a, b)) in pairs.iter().enumerate() {
+                    let a_len = a.chars().count();
+                    let b_len = b.chars().count();
+                    if a_len > GPU_MAX_STRING_LEN || b_len > GPU_MAX_STRING_LEN {
+                        cpu_oversized.push((op_i, j));
+                    } else {
+                        chars_a.extend(a.chars().map(|c| c as u32));
+                        offsets_a.push(chars_a.len() as u32);
+                        chars_b.extend(b.chars().map(|c| c as u32));
+                        offsets_b.push(chars_b.len() as u32);
+                        op_gpu.push(j);
+                    }
+                }
+                let start = gpu_global;
+                gpu_global += op_gpu.len() as u32;
+                gpu_ranges.push((start, op_gpu.len() as u32));
+                op_gpu_to_pair.push(op_gpu);
+                out.push(op_results);
+            }
+
+            let total_gpu = gpu_global as usize;
+
+            if !cpu_oversized.is_empty() {
+                let cpu_res: Vec<i64> = cpu_oversized
+                    .par_iter()
+                    .map(|&(op, j)| needleman_wunsch_affine(
+                        self.ops[op][j].0, self.ops[op][j].1,
+                        self.match_score, self.mismatch_score, self.gap_open, self.gap_extend,
+                    ))
+                    .collect();
+                for (k, &(op, j)) in cpu_oversized.iter().enumerate() {
+                    out[op][j] = cpu_res[k];
+                }
+            }
+
+            // Below the (auto or user-set) GPU threshold the whole batch is
+            // cheaper on CPU.
+            if total_gpu < self.kernel.engine.effective_gpu_threshold() {
+                crate::gpu::GpuEngine::record_routing(0, total_gpu);
+                let mut gpu_op_pair: Vec<(usize, usize)> = Vec::with_capacity(total_gpu);
+                for (op, &(_, count)) in gpu_ranges.iter().enumerate() {
+                    for k in 0..count as usize {
+                        gpu_op_pair.push((op, op_gpu_to_pair[op][k]));
+                    }
+                }
+                let cpu_res: Vec<i64> = gpu_op_pair
+                    .par_iter()
+                    .map(|&(op, j)| needleman_wunsch_affine(
+                        self.ops[op][j].0, self.ops[op][j].1,
+                        self.match_score, self.mismatch_score, self.gap_open, self.gap_extend,
+                    ))
+                    .collect();
+                for (idx, &(op, j)) in gpu_op_pair.iter().enumerate() {
+                    out[op][j] = cpu_res[idx];
+                }
+                return Ok(out);
+            }
+            crate::gpu::GpuEngine::record_routing(total_gpu, 0);
+
+            if chars_a.is_empty() { chars_a.push(0); }
+            if chars_b.is_empty() { chars_b.push(0); }
+
+            let chars_a_bytes = (chars_a.len() * 4) as u64;
+            let chars_b_bytes = (chars_b.len() * 4) as u64;
+            let results_size = (total_gpu as u64) * 4;
+            let limit = self.kernel.engine.max_buffer_size_effective();
+            if chars_a_bytes > limit || chars_b_bytes > limit || results_size > limit {
+                return Err(FuzzGpuError::BufferError(
+                    "Batch buffer size exceeds device max_buffer_size".into(),
+                ));
+            }
+
+            // Single submit: all chunks recorded into one encoder, read back once.
+            let mut pool = self.kernel.pool.lock().unwrap_or_else(|e| e.into_inner());
+            let offsets_bytes = ((offsets_a.len() * 4) as u64).max(results_size);
+            pool.ensure(&self.kernel.engine.device, SLOT_OFFSETS_A, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bnoa");
+            pool.ensure(&self.kernel.engine.device, SLOT_OFFSETS_B, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bnob");
+            pool.ensure(&self.kernel.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bnca");
+            pool.ensure(&self.kernel.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bncb");
+            pool.ensure(&self.kernel.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "bnres");
+            pool.ensure(&self.kernel.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "bnstg");
+            pool.ensure(&self.kernel.engine.device, SLOT_PARAMS, std::mem::size_of::<Params>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "bnp");
+
+            pool.write(&self.kernel.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&offsets_a));
+            pool.write(&self.kernel.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
+            pool.write(&self.kernel.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&offsets_b));
+            pool.write(&self.kernel.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+
+            let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
+            let buf_chars_a = pool.get(SLOT_CHARS_A);
+            let buf_offsets_b = pool.get(SLOT_OFFSETS_B);
+            let buf_chars_b = pool.get(SLOT_CHARS_B);
+            let buf_results = pool.get(SLOT_RESULTS);
+            let buf_params = pool.get(SLOT_PARAMS);
+
+            // Per-chunk submit + readback (see the Levenshtein kernel: one
+            // shared submit would give every dispatch the LAST chunk's offset).
+            let mut raw: Vec<f32> = Vec::with_capacity(total_gpu);
+            let mut remaining = total_gpu as u32;
+            let mut offset = 0u32;
+            while remaining > 0 {
+                let chunk = remaining.min(MAX_DISPATCH);
+                let params = Params {
+                    batch_size: total_gpu as u32,
+                    max_len: GPU_MAX_STRING_LEN as u32,
+                    offset,
+                    match_score: self.match_score as f32,
+                    mismatch_score: self.mismatch_score as f32,
+                    gap_open: self.gap_open as f32,
+                    gap_extend: self.gap_extend as f32,
+                    _pad: 0,
+                };
+                pool.write(&self.kernel.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
+
+                let bg = self.kernel.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.kernel.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 4, resource: buf_results.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
+                    ],
+                });
+
+                let mut encoder = self.kernel.engine.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("needleman batch encoder") },
+                );
+                let workgroups = (chunk + 15) / 16;
+                {
+                    let mut pass = encoder.begin_compute_pass(
+                        &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
+                    );
+                    pass.set_pipeline(&self.kernel.pipeline);
+                    pass.set_bind_group(0, &bg, &[]);
+                    pass.dispatch_workgroups(workgroups, 1, 1);
+                }
+                let chunk_bytes = (chunk as u64) * 4;
+                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
+                let bytes = self.kernel.engine.readback(encoder, &pool, chunk_bytes)?;
+                raw.extend_from_slice(bytemuck::cast_slice(&bytes));
+
                 remaining -= chunk;
                 offset += chunk;
             }
 
-            encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, results_size);
-            self.engine.submit(encoder);
 
-            let slice = buf_staging.slice(..);
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.engine.map_readback(&slice, move |r| { let _ = tx.send(r); });
-            self.engine.poll();
-
-            rx.recv_timeout(GpuEngine::readback_timeout())
-                .map_err(|_| FuzzGpuError::Timeout("GPU buffer mapping timed out after 10s".into()))?
-                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
-
-            let data = slice
-                .get_mapped_range()
-                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
-            let gpu_results: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
-            drop(data);
-            buf_staging.unmap();
-            Ok(gpu_results)
+            // Split the flat result range back into per-op vectors (f32 -> i64).
+            for (op, &(start, count)) in gpu_ranges.iter().enumerate() {
+                for k in 0..count as usize {
+                    let j = op_gpu_to_pair[op][k];
+                    let v = raw[(start as usize) + k];
+                    if v < SENTINEL_THRESHOLD {
+                        out[op][j] = needleman_wunsch_affine(
+                            self.ops[op][j].0, self.ops[op][j].1,
+                            self.match_score, self.mismatch_score, self.gap_open, self.gap_extend,
+                        );
+                    } else {
+                        out[op][j] = v as i64;
+                    }
+                }
+            }
+            Ok(out)
         }
     }
 
@@ -484,4 +878,5 @@ mod tests {
         let score = needleman_wunsch_affine("ACGT", "AT", 2, -1, -3, -1);
         assert!(score < 8);
     }
+
 }

@@ -22,6 +22,11 @@ rayon = "1.10"
 
 [dev-dependencies]
 proptest = "1.11.0"
+criterion = "0.5"
 # Integration tests construct wgpu objects (e.g. pipeline layouts) to drive the
 # public kernel-registration API; same version as the gpu feature's dep.
 wgpu = { workspace = true }
+
+[[bench]]
+name = "bench"
+harness = false

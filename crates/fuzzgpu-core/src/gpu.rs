@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use thiserror::Error;
@@ -26,6 +26,14 @@ pub(crate) fn require_gpu() -> bool {
     std::env::var("FUZZGPU_REQUIRE_GPU")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
+}    /// Whether the dispatch-serialization workaround is bypassed. Shared by the
+    /// test-only lock below and the production [`GpuEngine::dispatch_lock`] so
+    /// `FUZZGPU_SKIP_DISPATCH_LOCK=1` disables BOTH — the repro harness needs the
+    /// bypass to reproduce upstream gfx-rs/wgpu#10085 under real concurrency.
+    pub fn dispatch_lock_bypass() -> bool {
+    std::env::var("FUZZGPU_SKIP_DISPATCH_LOCK")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 /// Serialize GPU access across tests. This is a workaround for a wgpu/driver
@@ -37,10 +45,7 @@ pub(crate) fn require_gpu() -> bool {
 /// underlying crash can be reproduced / bisected in CI or locally.
 #[cfg(test)]
 pub(crate) fn gpu_test_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
-    if std::env::var("FUZZGPU_SKIP_DISPATCH_LOCK")
-        .map(|v| v == "1")
-        .unwrap_or(false)
-    {
+    if dispatch_lock_bypass() {
         return None;
     }
     Some(GPU_TEST_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
@@ -125,22 +130,118 @@ pub enum FuzzGpuError {
 
 pub type Result<T> = std::result::Result<T, FuzzGpuError>;
 
+/// Slot ids for the shared [`BufferPool`] — the same layout every kernel uses
+/// (offsets/chars for the two input lists, results, readback staging, and the
+/// per-dispatch uniform).
+pub(crate) const SLOT_OFFSETS_A: usize = 0;
+pub(crate) const SLOT_CHARS_A: usize = 1;
+pub(crate) const SLOT_OFFSETS_B: usize = 2;
+pub(crate) const SLOT_CHARS_B: usize = 3;
+pub(crate) const SLOT_RESULTS: usize = 4;
+pub(crate) const SLOT_STAGING: usize = 5;
+pub(crate) const SLOT_PARAMS: usize = 6;
+
+/// Reusable GPU buffer arena shared by all kernels.
+///
+/// Every fuzzgpu dispatch is fully synchronous (submit → map → poll → read →
+/// unmap) before it returns, so a buffer that was just read back is idle and
+/// safe to reuse for the next dispatch. Keeping buffers alive across calls
+/// removes the per-call `create_buffer` cost — the dominant fixed overhead for
+/// small/medium batches (each allocation round-trips through the driver and
+/// gpu-allocator). Growth is geometric to amortize reallocation.
+pub(crate) struct BufferPool {
+    slots: Vec<Option<(wgpu::Buffer, u64)>>,
+}
+
+impl BufferPool {
+    pub(crate) fn new() -> Self {
+        BufferPool { slots: Vec::new() }
+    }
+
+    /// Ensure slot `id` holds at least `needed` bytes, creating or growing it
+    /// geometrically. Call before [`Self::get`] / [`Self::write`].
+    pub(crate) fn ensure(
+        &mut self,
+        device: &wgpu::Device,
+        id: usize,
+        needed: u64,
+        usage: wgpu::BufferUsages,
+        label: &str,
+    ) {
+        if self.slots.len() <= id {
+            self.slots.resize(id + 1, None);
+        }
+        let current = self.slots[id].as_ref().map(|(_, cap)| *cap).unwrap_or(0);
+        if current >= needed {
+            return;
+        }
+        // Geometric growth: at least 2x the previous capacity, floor 1 KiB.
+        let new_cap = needed.max(1024).max(current * 2);
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: new_cap,
+            usage,
+            mapped_at_creation: false,
+        });
+        self.slots[id] = Some((buf, new_cap));
+    }
+
+    /// Borrow the buffer for slot `id` (must have been `ensure`d).
+    pub(crate) fn get(&self, id: usize) -> &wgpu::Buffer {
+        &self.slots[id]
+            .as_ref()
+            .expect("BufferPool::get called before ensure")
+            .0
+    }
+
+    /// Upload `data` into slot `id` (the buffer must have `COPY_DST` usage).
+    pub(crate) fn write(&self, queue: &wgpu::Queue, id: usize, data: &[u8]) {
+        queue.write_buffer(self.get(id), 0, data);
+    }
+}
+
 pub struct GpuEngine {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub info: GpuInfo,
     pub max_buffer_size: u64,
     pub max_storage_buffer_binding_size: u32,
+    /// Serializes GPU dispatch across threads. The upstream wgpu/driver crash
+    /// (gfx-rs/wgpu#10085) triggers under >=3 concurrent dispatchers on the
+    /// shared device (Intel iGPUs, DX12/Vulkan) — e.g. two Python threads
+    /// calling the GIL-releasing GPU bindings simultaneously. Every public GPU
+    /// entry point holds this lock for the duration of its dispatch + readback,
+    /// so at most one submission is ever in flight. `FUZZGPU_SKIP_DISPATCH_LOCK`
+    /// bypasses it (repro harness only).
+    dispatch_lock: std::sync::Mutex<()>,
 }
 
 static GLOBAL_ENGINE: OnceLock<Arc<GpuEngine>> = OnceLock::new();
 static CPU_ONLY_FLAG: AtomicBool = AtomicBool::new(false);
 static ENV_CPU_CHECK: OnceLock<bool> = OnceLock::new();
 
+/// User override for the GPU dispatch threshold (pairs below which a batch is
+/// routed to CPU). `None` = auto-select from the adapter (see
+/// [`GpuEngine::auto_gpu_threshold`]). Set via [`GpuEngine::set_gpu_threshold`]
+/// or the Python/JS `set_gpu_threshold(None)` API. A `Mutex` (not `OnceLock`)
+/// so the value can be changed at runtime.
+static GPU_THRESHOLD_OVERRIDE: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+/// Diagnostics: how many pairs were routed to GPU vs CPU by the most recent
+/// GPU-eligible call (best-effort, for `hardware_info`/debugging — not a
+/// synchronization contract).
+static LAST_ROUTING_GPU: AtomicUsize = AtomicUsize::new(0);
+static LAST_ROUTING_CPU: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Debug, Clone)]
 pub struct GpuInfo {
     pub name: String,
     pub backend: String,
+    /// Adapter device type (DiscreteGpu / IntegratedGpu / VirtualGpu / Cpu / Other).
+    /// Drives the auto-routing threshold: discrete GPUs get a low threshold
+    /// (GPU wins early), integrated and software (virtual) GPUs get
+    /// conservative thresholds where Rayon is usually faster.
+    pub device_type: String,
 }
 
 impl GpuEngine {
@@ -169,6 +270,104 @@ impl GpuEngine {
             return false;
         }
         Self::get().is_ok()
+    }
+
+    /// Override the GPU dispatch threshold (pairs below which a batch is routed
+    /// to CPU). `None` restores automatic selection from the adapter.
+    ///
+    /// The auto value (see [`Self::auto_gpu_threshold`]) is a good default, but
+    /// callers on a known machine — e.g. a workstation with a discrete GPU and
+    /// a weak CPU — may want to force GPU routing below the auto threshold, or
+    /// force CPU routing on a software renderer.
+    pub fn set_gpu_threshold(threshold: Option<usize>) {
+        *GPU_THRESHOLD_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = threshold;
+    }
+
+    /// The user-supplied threshold override, if any.
+    pub fn gpu_threshold_override() -> Option<usize> {
+        *GPU_THRESHOLD_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The auto-selected GPU dispatch threshold for a *hypothetical* adapter
+    /// class — used before any engine exists and by the Python diagnostics.
+    ///
+    /// - Discrete GPUs: low threshold (64) — fast PCIe/NVLink sync and high
+    ///   shader throughput make the GPU win even for modest batches.
+    /// - Integrated GPUs: 500 (the historical default) — the per-dispatch
+    ///   round-trip (~1 ms) dominates below this, and Rayon usually beats the
+    ///   iGPU's DP kernels.
+    /// - Virtual/software GPUs (lavapipe, llvmpipe, SwiftShader): 2000 — a
+    ///   software rasterizer almost never beats 8 CPU cores.
+    /// - CPU adapters: `usize::MAX` (never route to GPU).
+    pub fn auto_gpu_threshold(device_type: &str) -> usize {
+        match device_type {
+            "DiscreteGpu" => 64,
+            "IntegratedGpu" => 500,
+            "VirtualGpu" => 2000,
+            "Cpu" => usize::MAX,
+            _ => 500,
+        }
+    }
+
+    /// The effective GPU dispatch threshold for this engine: the user override
+    /// if set, else auto-selected from the adapter's device type.
+    pub fn effective_gpu_threshold(&self) -> usize {
+        match Self::gpu_threshold_override() {
+            Some(t) => t,
+            None => Self::auto_gpu_threshold(&self.info.device_type),
+        }
+    }
+
+    /// Effective GPU threshold for a *specific metric*. The auto thresholds
+    /// are tuned for the Myers bit-vector Levenshtein kernel, which wins on
+    /// iGPUs at scale; the O(m·w) Jaro bitmap kernel and the Lowrance-Wagner
+    /// Damerau SLM kernel lose to the SIMD CPU path on integrated GPUs at
+    /// every measured scale (Iris Xe: Jaro ~2×, Damerau ~6× slower at 50k
+    /// pairs), so auto-routing never dispatches them there. On discrete GPUs
+    /// the per-pair compute advantage flips, but the ~0.5 ms sync round-trip
+    /// still demands a much larger batch than Myers — `discrete_factor` scales
+    /// the (already low) discrete auto threshold accordingly. An explicit
+    /// [`Self::set_gpu_threshold`] override always wins.
+    pub fn metric_gpu_threshold(&self, discrete_factor: usize) -> usize {
+        match Self::gpu_threshold_override() {
+            Some(t) => t,
+            None => match self.info.device_type.as_str() {
+                // dGPU: auto threshold (64) × factor, e.g. 16 → 1024 pairs for
+                // Jaro, 32 → 2048 for Damerau.
+                "DiscreteGpu" => Self::auto_gpu_threshold("DiscreteGpu")
+                    .saturating_mul(discrete_factor),
+                // Integrated, virtual/software, CPU, unknown: never auto-route
+                // these kernels (CPU SIMD wins at every measured scale).
+                _ => usize::MAX,
+            },
+        }
+    }
+
+    /// The effective GPU dispatch threshold for the *current* engine (or the
+    /// auto default if no engine exists yet). Convenience for diagnostics.
+    pub fn current_gpu_threshold() -> usize {
+        if let Some(engine) = GLOBAL_ENGINE.get() {
+            engine.effective_gpu_threshold()
+        } else if let Ok(engine) = Self::get() {
+            engine.effective_gpu_threshold()
+        } else {
+            Self::auto_gpu_threshold("IntegratedGpu")
+        }
+    }
+
+    /// Record a routing decision for the diagnostics API: `gpu_pairs` pairs were
+    /// dispatched to the GPU and `cpu_pairs` were computed on CPU (oversized or
+    /// below-threshold) by the most recent GPU-eligible call.
+    pub fn record_routing(gpu_pairs: usize, cpu_pairs: usize) {
+        LAST_ROUTING_GPU.store(gpu_pairs, Ordering::Relaxed);
+        LAST_ROUTING_CPU.store(cpu_pairs, Ordering::Relaxed);
+    }
+
+    /// Last routing decision: `(gpu_pairs, cpu_pairs)` of the most recent
+    /// GPU-eligible call. Lets callers confirm a "GPU mode" call actually
+    /// dispatched to the GPU (it is *not* silently CPU-routed).
+    pub fn last_routing() -> (usize, usize) {
+        (LAST_ROUTING_GPU.load(Ordering::Relaxed), LAST_ROUTING_CPU.load(Ordering::Relaxed))
     }
 
     /// Submit a finished command encoder to the GPU queue.
@@ -253,6 +452,47 @@ impl GpuEngine {
         Duration::from_secs(10)
     }
 
+    /// Submit an encoder and synchronously read back `size` bytes from the
+    /// pool's staging slot (the encoder must have copied results into it).
+    ///
+    /// This is the single-sync primitive the batched APIs use: N queued
+    /// dispatches are recorded into one encoder, submitted once, and read back
+    /// with one map/poll round-trip — amortizing the per-call sync cost that
+    /// dominates small dispatches.
+    pub(crate) fn readback(
+        &self,
+        encoder: wgpu::CommandEncoder,
+        pool: &BufferPool,
+        size: u64,
+    ) -> Result<Vec<u8>> {
+        self.submit(encoder);
+        let staging = pool.get(SLOT_STAGING);
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.map_readback(&slice, move |r| { let _ = tx.send(r); });
+        self.poll();
+        rx.recv_timeout(Self::readback_timeout())
+            .map_err(|_| FuzzGpuError::Timeout("GPU readback timed out after 10s".into()))?
+            .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {e}")))?;
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
+        let bytes = data[..size as usize].to_vec();
+        drop(data);
+        staging.unmap();
+        Ok(bytes)
+    }
+
+    /// Take the production dispatch lock (see the field doc). Returns `None`
+    /// when `FUZZGPU_SKIP_DISPATCH_LOCK` is set so the repro harness can
+    /// reproduce upstream #10085 under real concurrency.
+    pub(crate) fn dispatch_lock(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
+        if dispatch_lock_bypass() {
+            return None;
+        }
+        Some(self.dispatch_lock.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
     /// The maximum buffer size to allow for GPU allocations.
     ///
     /// Test-only fault injection: when the small-buffer fault is armed on the
@@ -310,6 +550,7 @@ impl GpuEngine {
         let info = GpuInfo {
             name: adapter_info.name.clone(),
             backend: format!("{:?}", adapter_info.backend),
+            device_type: format!("{:?}", adapter_info.device_type),
         };
 
         // Query adapter limits dynamically rather than hardcoding static limits
@@ -320,7 +561,13 @@ impl GpuEngine {
         let required_limits = wgpu::Limits {
             max_storage_buffer_binding_size: target_storage_size,
             max_buffer_size: target_buffer_size,
-            max_compute_workgroup_storage_size: 16384.min(adapter_limits.max_compute_workgroup_storage_size),
+            // 32 KiB target (up from 16 KiB): the Damerau kernel keeps a full
+            // Lowrance-Wagner matrix per pair in workgroup shared memory
+            // (~22.6 KiB at workgroup size 4 with a 32-char cap). Requesting
+            // min(adapter, 32 KiB) never exceeds the adapter, so device
+            // creation cannot fail from this change; devices below the
+            // Damerau budget simply route that kernel to CPU.
+            max_compute_workgroup_storage_size: 32768.min(adapter_limits.max_compute_workgroup_storage_size),
             max_compute_invocations_per_workgroup: 256.min(adapter_limits.max_compute_invocations_per_workgroup),
             ..Default::default()
         };
@@ -349,6 +596,7 @@ impl GpuEngine {
             max_buffer_size: target_buffer_size as u64,
             // wgpu 30 widened this limit to u64; the 128 MiB cap fits u32.
             max_storage_buffer_binding_size: target_storage_size as u32,
+            dispatch_lock: std::sync::Mutex::new(()),
         });
 
         Ok(engine)
@@ -385,5 +633,53 @@ mod tests {
                 eprintln!("skipping GPU test (no usable device): {}", e);
             }
         }
+    }
+
+    /// The auto-routing threshold must reflect the adapter class: discrete
+    /// GPUs route to GPU early (low threshold), integrated and software GPUs
+    /// are conservative, CPU adapters never route.
+    #[test]
+    fn test_auto_threshold_by_device_type() {
+        assert_eq!(GpuEngine::auto_gpu_threshold("DiscreteGpu"), 64);
+        assert_eq!(GpuEngine::auto_gpu_threshold("IntegratedGpu"), 500);
+        assert_eq!(GpuEngine::auto_gpu_threshold("VirtualGpu"), 2000);
+        assert_eq!(GpuEngine::auto_gpu_threshold("Cpu"), usize::MAX);
+        assert_eq!(GpuEngine::auto_gpu_threshold("Other"), 500);
+    }
+
+    /// `set_gpu_threshold` must override the auto value and be resettable to
+    /// auto (`None`) at runtime (a `Mutex`, not a one-shot `OnceLock`). The
+    /// override is global, so this test holds the GPU test lock — serializing
+    /// it against every other GPU test, which would otherwise see the
+    /// temporary override (e.g. a 1000-pair fault-injection test routed to
+    /// CPU instead of dispatching) — and restores `None` before returning.
+    #[test]
+    fn test_set_gpu_threshold_override_and_reset() {
+        let _gpu_guard = gpu_test_lock();
+        GpuEngine::set_gpu_threshold(Some(1234));
+        assert_eq!(GpuEngine::gpu_threshold_override(), Some(1234));
+        if let Ok(engine) = GpuEngine::get() {
+            assert_eq!(engine.effective_gpu_threshold(), 1234);
+        }
+        // Resettable: back to auto (no override).
+        GpuEngine::set_gpu_threshold(None);
+        assert_eq!(GpuEngine::gpu_threshold_override(), None);
+        if let Ok(engine) = GpuEngine::get() {
+            assert_eq!(
+                engine.effective_gpu_threshold(),
+                GpuEngine::auto_gpu_threshold(&engine.info.device_type),
+                "effective threshold must follow the adapter's auto value after reset"
+            );
+        }
+    }
+
+    /// `record_routing` / `last_routing` must surface the most recent routing
+    /// decision so callers can confirm GPU mode actually dispatched.
+    #[test]
+    fn test_last_routing_diagnostics() {
+        GpuEngine::record_routing(0, 0);
+        assert_eq!(GpuEngine::last_routing(), (0, 0));
+        GpuEngine::record_routing(750, 250);
+        assert_eq!(GpuEngine::last_routing(), (750, 250));
     }
 }

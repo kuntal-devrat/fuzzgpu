@@ -1,0 +1,24 @@
+[package]
+name = "fuzzgpu-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Fuzz targets for fuzzgpu-core (cargo-fuzz on nightly; self-harness runs on stable)"
+
+# Standalone crate: not a member of the root workspace so `cargo test
+# --workspace` (stable, CI) never builds the libFuzzer toolchain. The fuzz
+# targets themselves compile on stable; only *running* them needs nightly +
+# `cargo fuzz` (or `cargo +nightly fuzz run <target>`).
+#
+# The `#![no_main]` fuzz targets cannot be built as test harnesses, so test
+# them with `cargo test --lib` (the self-harness in src/lib.rs), never plain
+# `cargo test`.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = "1"
+fuzzgpu-core = { path = "../crates/fuzzgpu-core", default-features = false }

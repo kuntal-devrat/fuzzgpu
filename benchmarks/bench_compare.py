@@ -1,236 +1,209 @@
-"""Benchmark fuzzgpu vs rapidfuzz vs python-Levenshtein.
+"""Reproducible cross-library benchmark for fuzzgpu.
 
-All comparisons are fair: batch-vs-batch, single-vs-single.
+Replaces the v0.1.0 script, which timed single un-warmed calls (best-of-3,
+no warmup) and compared against pure Python — producing numbers that were
+not reproducible on real hardware.
+
+Methodology (all timings are one full library call):
+- `warmup()` on fuzzgpu first (engine init + shader compile excluded).
+- Each measurement is the **median of `--repeats`** (default 7) runs after a
+  warmup call, via `time.perf_counter` around each run.
+- Hardware and library versions are printed so the numbers are traceable.
+- Columns: fuzzgpu (GPU), fuzzgpu (CPU-only / Rayon), rapidfuzz, and
+  python-Levenshtein where it has a comparable API.
+  Note: fuzzgpu's CPU path is multi-threaded (Rayon); rapidfuzz and
+  python-Levenshtein are single-threaded C/C++ — the speedup column is vs
+  rapidfuzz as the standard single-threaded reference.
+
+Run:  python benchmarks/bench_compare.py [--repeats N] [--matrix-max 200]
 """
 
-import time
-import random
-import string
+import argparse
+import statistics
 import sys
+import time
+
+# The × and unicode in table headers must survive Windows' cp1252 console.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 import fuzzgpu
-import rapidfuzz
-import rapidfuzz.distance.Levenshtein as rf_lev
-import rapidfuzz.distance.DamerauLevenshtein as rf_dam
-from rapidfuzz.distance import JaroWinkler as rf_jw
-import Levenshtein as py_lev
+
+USE_CPU_ONLY = "--cpu-only" in sys.argv
 
 
-def random_string(length=10):
-    return "".join(random.choices(string.ascii_lowercase, k=length))
-
-
-def random_strings(n, length=10):
-    return [random_string(length) for _ in range(n)]
-
-
-def levenshtein_python(a, b):
-    """Pure Python Levenshtein."""
-    if len(a) < len(b):
-        return levenshtein_python(b, a)
-    if len(b) == 0:
-        return len(a)
-    prev = list(range(len(b) + 1))
-    for ca in a:
-        curr = [prev[0] + 1]
-        for j, cb in enumerate(b):
-            cost = 0 if ca == cb else 1
-            curr.append(min(prev[j + 1] + 1, curr[j] + 1, prev[j] + cost))
-        prev = curr
-    return prev[-1]
-
-
-def bench(fn, *args, repeats=3):
-    """Run fn(*args) `repeats` times, return best time."""
-    best = float("inf")
-    result = None
+def timed(fn, *args, repeats=7):
+    """Median wall time (s) of `fn(*args)` over `repeats` runs, one warmup first."""
+    fn(*args)  # warmup (also keeps caches hot for the measured runs)
+    times = []
     for _ in range(repeats):
         t0 = time.perf_counter()
-        result = fn(*args)
-        elapsed = time.perf_counter() - t0
-        best = min(best, elapsed)
-    return best, result
+        fn(*args)
+        times.append(time.perf_counter() - t0)
+    return statistics.median(times)
 
 
-def print_tableheader():
-    print(f"{'Size':>8} | {'fuzzgpu':>10} | {'rapidfuzz':>10} | {'py-Lev':>10} | {'Python':>10} | {'vs RF':>8} | {'vs py-Lev':>10}")
-    print("-" * 95)
+def ms(t):
+    return f"{t * 1000:8.2f} ms"
 
 
-def print_tablerow(size, t_gpu, t_rf, t_pylev, t_py):
-    rf_vs = t_rf / t_gpu if t_gpu > 0 else float("inf")
-    pylev_vs = t_pylev / t_gpu if t_gpu > 0 else float("inf")
-    py_str = f"{t_py*1000:>9.2f}ms" if t_py != float("inf") else "       N/A"
-    pylev_str = f"{t_pylev*1000:>9.2f}ms" if t_pylev != float("inf") else "       N/A"
-    print(f"{size:>8} | {t_gpu*1000:>9.2f}ms | {t_rf*1000:>9.2f}ms | {pylev_str} | {py_str} | {rf_vs:>7.2f}x | {pylev_vs:>9.2f}x")
+def speedup(base, other):
+    if base is None or other is None:
+        return "N/A"
+    return f"{base / other:6.2f}×"
 
 
-def benchmark_levenshtein_batch():
-    print("=" * 95)
-    print("LEVENSHTEIN BATCH: 1 query x N candidates (10-char strings)")
-    print("=" * 95)
-    print_tableheader()
+def batch_header(name, columns):
+    print(f"\n### {name}")
+    print("| Batch Size | " + " | ".join(columns) + " |")
+    print("| :--- | " + " | ".join(":---:" for _ in columns) + " |")
+
+
+def batch_row(size, row):
+    print("| " + " | ".join(str(v) for v in [f"**{size:,}**"] + row) + " |")
+
+
+def make_candidates(n, length=10, seed=42):
+    import random
+
+    rng = random.Random(seed)
+    alphabet = "abcdefghijklmnopqrstuvwxyz"
+    return ["".join(rng.choices(alphabet, k=length)) for _ in range(n)]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--repeats", type=int, default=7)
+    ap.add_argument("--matrix-max", type=int, default=200)
+    args = ap.parse_args()
+
+    # Engine init + shader compilation must not pollute measurements.
+    print(f"fuzzgpu {fuzzgpu.__version__} | gpu_info: {fuzzgpu.gpu_info()}")
+    fuzzgpu.warmup()
+    fuzzgpu.set_cpu_only(False)
+    gpu_available = fuzzgpu.is_gpu_available()
+    print(f"GPU available: {gpu_available} | repeats: {args.repeats}")
+    if gpu_available:
+        print(f"GPU: {fuzzgpu.gpu_info()}")
+
+    try:
+        import rapidfuzz
+        from rapidfuzz import process as rf_process
+        from rapidfuzz.distance import Levenshtein as RFLev
+        from rapidfuzz.distance import DamerauLevenshtein as RFDam
+        from rapidfuzz.distance import JaroWinkler as RFJW
+        rf_version = rapidfuzz.__version__
+    except ImportError:
+        rf_process = RFLev = RFDam = RFJW = None
+        rf_version = "not installed"
+
+    try:
+        import Levenshtein as pylev
+        pylev_version = pylev.__version__
+    except ImportError:
+        pylev = None
+        pylev_version = "not installed"
+
+    print(f"rapidfuzz {rf_version} | python-Levenshtein {pylev_version}")
 
     query = "hello world"
-    candidates = random_strings(50_000, 10)
+    sizes = [100, 1_000, 10_000, 50_000]
+    cands = {n: make_candidates(n) for n in sizes}
 
-    for n in [100, 500, 1_000, 5_000, 10_000, 20_000, 50_000]:
-        batch = candidates[:n]
+    def fg_gpu(fn, *a):
+        if not gpu_available:
+            return None
+        fuzzgpu.set_cpu_only(False)
+        return timed(fn, *a, repeats=args.repeats)
 
-        # fuzzgpu (GPU / parallel batch API)
-        t_gpu, _ = bench(fuzzgpu.levenshtein_batch, query, batch)
+    def fg_cpu(fn, *a):
+        fuzzgpu.set_cpu_only(True)
+        return timed(fn, *a, repeats=args.repeats)
 
-        # rapidfuzz (batch)
-        t_rf, _ = bench(lambda: [rf_lev.distance(query, c) for c in batch])
+    def rf_batch(scorer, query_s, cands_s):
+        # rapidfuzz process.cdist: 1 query x N candidates, single-threaded C.
+        return timed(lambda: rf_process.cdist([query_s], cands_s, scorer=scorer.distance)[0], repeats=args.repeats)
 
-        # python-Levenshtein (batch)
-        t_pylev, _ = bench(lambda: [py_lev.distance(query, c) for c in batch])
+    # ---- Levenshtein batch -------------------------------------------------
+    columns = ["`fuzzgpu` (GPU)", "`fuzzgpu` (CPU)", "`rapidfuzz`", "vs RF (GPU)", "vs RF (CPU)"]
+    batch_header("Levenshtein Batch (1 query × N candidates, 10-char strings)", columns)
+    for n in sizes:
+        c = cands[n]
+        tg = fg_gpu(fuzzgpu.levenshtein_batch, query, c)
+        tc = fg_cpu(fuzzgpu.levenshtein_batch, query, c)
+        tr = rf_batch(RFLev, query, c) if RFLev else None
+        batch_row(n, [ms(tg) if tg else "N/A", ms(tc), ms(tr) if tr else "N/A",
+                      speedup(tr, tg) if tg else "N/A", speedup(tr, tc) if tc else "N/A"])
 
-        # pure python
-        if n <= 5_000:
-            t_py, _ = bench(lambda: [levenshtein_python(query, c) for c in batch], repeats=1)
+    # ---- Damerau-Levenshtein batch -----------------------------------------
+    # The GPU kernel exists (Lowrance-Wagner SLM kernel, bit-exact) but the
+    # backend-aware routing sends it to CPU on integrated GPUs where the SIMD
+    # CPU path wins at every measured scale; the GPU column therefore reports
+    # the auto-routed result (which is the CPU path on iGPUs).
+    columns = ["`fuzzgpu` (GPU)", "`fuzzgpu` (CPU)", "`rapidfuzz`", "vs RF (GPU)", "vs RF (CPU)"]
+    batch_header("Damerau-Levenshtein Batch (1 query × N candidates)", columns)
+    for n in sizes:
+        c = cands[n]
+        tg = fg_gpu(fuzzgpu.damerau_levenshtein_batch, query, c)
+        tc = fg_cpu(fuzzgpu.damerau_levenshtein_batch, query, c)
+        tr = rf_batch(RFDam, query, c) if RFDam else None
+        batch_row(n, [ms(tg) if tg else "N/A", ms(tc), ms(tr) if tr else "N/A",
+                      speedup(tr, tg) if tg else "N/A", speedup(tr, tc) if tc else "N/A"])
+
+    # ---- Jaro-Winkler batch -------------------------------------------------
+    columns = ["`fuzzgpu` (GPU)", "`fuzzgpu` (CPU)", "`rapidfuzz`", "vs RF (GPU)", "vs RF (CPU)"]
+    batch_header("Jaro-Winkler Batch (p = 0.1)", columns)
+    for n in sizes:
+        c = cands[n]
+        tg = fg_gpu(fuzzgpu.jaro_winkler_batch, query, c, 0.1)
+        tc = fg_cpu(fuzzgpu.jaro_winkler_batch, query, c, 0.1)
+        tr = rf_batch(RFJW, query, c) if RFJW else None
+        batch_row(n, [ms(tg) if tg else "N/A", ms(tc), ms(tr) if tr else "N/A",
+                      speedup(tr, tg) if tg else "N/A", speedup(tr, tc) if tc else "N/A"])
+
+    # ---- Needleman-Wunsch (affine) batch ------------------------------------
+    try:
+        from rapidfuzz.distance import NeedlemanWunsch as RFNW
+    except ImportError:
+        RFNW = None
+    columns = ["`fuzzgpu` (GPU)", "`fuzzgpu` (CPU)", "`rapidfuzz`", "vs RF (GPU)", "vs RF (CPU)"]
+    batch_header("Needleman-Wunsch Batch (affine, match=1, mismatch=-1, gap_open=-2, gap_extend=-1)", columns)
+    for n in sizes:
+        c = cands[n]
+        tg = fg_gpu(fuzzgpu.needleman_wunsch_affine_batch, query, c, 1, -1, -2, -1)
+        tc = fg_cpu(fuzzgpu.needleman_wunsch_affine_batch, query, c, 1, -1, -2, -1)
+        tr = rf_batch(RFNW, query, c) if RFNW else None
+        batch_row(n, [ms(tg) if tg else "N/A", ms(tc), ms(tr) if tr else "N/A",
+                      speedup(tr, tg) if tg else "N/A", speedup(tr, tc) if tc else "N/A"])
+
+    # ---- Levenshtein cdist matrix -------------------------------------------
+    matrix_sizes = [(10, 10), (50, 50), (100, 100), (200, 200)]
+    print("\n### Levenshtein Cross-Product Matrix (`cdist`)")
+    print("| Matrix Size | Total Pairs | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | python-Levenshtein | vs RF (GPU) | vs RF (CPU) |")
+    print("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
+    for (ra, rb) in matrix_sizes:
+        if ra > args.matrix_max:
+            continue
+        a = make_candidates(ra, length=8, seed=7)
+        b = make_candidates(rb, length=8, seed=9)
+        total = ra * rb
+        tg = fg_gpu(fuzzgpu.levenshtein_cdist, a, b)
+        tc = fg_cpu(fuzzgpu.levenshtein_cdist, a, b)
+        tr = timed(lambda: rf_process.cdist(a, b, scorer=RFLev.distance), repeats=args.repeats) if RFLev else None
+        if pylev:
+            tp = timed(lambda: [[pylev.distance(x, y) for y in b] for x in a], repeats=3)
         else:
-            t_py = float("inf")
+            tp = None
+        print("| " + " | ".join([
+            f"**{ra} × {rb}**", f"{total:,}", ms(tg) if tg else "N/A", ms(tc),
+            ms(tr) if tr else "N/A", ms(tp) if tp else "N/A",
+            speedup(tr, tg) if tg else "N/A", speedup(tr, tc) if tc else "N/A",
+        ]) + " |")
 
-        print_tablerow(n, t_gpu, t_rf, t_pylev, t_py)
-    print()
-
-
-def benchmark_damerau_batch():
-    print("=" * 95)
-    print("DAMERAU-LEVENSHTEIN BATCH: 1 query x N candidates (10-char strings)")
-    print("=" * 95)
-    print(f"{'Size':>8} | {'fuzzgpu':>10} | {'rapidfuzz':>10} | {'speedup':>8}")
-    print("-" * 55)
-
-    query = "hello world"
-    candidates = random_strings(50_000, 10)
-
-    for n in [100, 1_000, 5_000, 10_000, 50_000]:
-        batch = candidates[:n]
-
-        t_gpu, _ = bench(fuzzgpu.damerau_levenshtein_batch, query, batch)
-        t_rf, _ = bench(lambda: [rf_dam.distance(query, c) for c in batch])
-
-        speedup = t_rf / t_gpu if t_gpu > 0 else float("inf")
-        print(f"{n:>8} | {t_gpu*1000:>9.2f}ms | {t_rf*1000:>9.2f}ms | {speedup:>7.2f}x")
-    print()
-
-
-def benchmark_levenshtein_cdist():
-    print("=" * 95)
-    print("LEVENSHTEIN CDIST: N x M matrix (10-char strings)")
-    print("=" * 95)
-    print_tableheader()
-
-    list_a = random_strings(200, 10)
-    list_b = random_strings(200, 10)
-
-    for na, nb in [(10, 10), (50, 50), (100, 100), (200, 200)]:
-        a, b = list_a[:na], list_b[:nb]
-
-        t_gpu, _ = bench(fuzzgpu.levenshtein_cdist, a, b)
-
-        def rf_cdist():
-            return [[rf_lev.distance(ai, bj) for bj in b] for ai in a]
-        t_rf, _ = bench(rf_cdist)
-
-        def pylev_cdist():
-            return [[py_lev.distance(ai, bj) for bj in b] for ai in a]
-        t_pylev, _ = bench(pylev_cdist)
-
-        total = na * nb
-        if total <= 10_000:
-            def py_cdist():
-                return [[levenshtein_python(ai, bj) for bj in b] for ai in a]
-            t_py, _ = bench(py_cdist)
-        else:
-            t_py = float("inf")
-
-        print_tablerow(f"{na}x{nb}", t_gpu, t_rf, t_pylev, t_py)
-    print()
-
-
-def benchmark_jaro_winkler():
-    print("=" * 95)
-    print("JARO-WINKLER: 1 query x N candidates (10-char strings)")
-    print("=" * 95)
-    print_tableheader()
-
-    query = "MARTHA"
-    candidates = random_strings(50_000, 10)
-
-    for n in [100, 1_000, 5_000, 10_000, 50_000]:
-        batch = candidates[:n]
-
-        t_gpu, _ = bench(fuzzgpu.jaro_winkler_batch_fn, query, batch, 0.1)
-        t_rf, _ = bench(lambda: [rf_jw.similarity(query, c) for c in batch])
-        t_pylev, _ = bench(lambda: [py_lev.jaro_winkler(query, c) for c in batch])
-
-        if n <= 1_000:
-            t_py, _ = bench(lambda: [rf_jw.similarity(query, c) for c in batch])
-        else:
-            t_py = float("inf")
-
-        print_tablerow(n, t_gpu, t_rf, t_pylev, t_py)
-    print()
-
-
-def benchmark_needleman_affine():
-    print("=" * 95)
-    print("NEEDLEMAN-WUNSCH (Linear vs Affine Gap): 1 query x N candidates")
-    print("=" * 95)
-    print(f"{'Size':>8} | {'Linear':>12} | {'Affine':>12}")
-    print("-" * 45)
-
-    query = "AGTACGCA"
-    candidates = random_strings(50_000, 10)
-
-    for n in [100, 1_000, 5_000, 10_000, 50_000]:
-        batch = candidates[:n]
-
-        t_lin, _ = bench(fuzzgpu.needleman_wunsch_batch, query, batch, 2, -1, -2)
-        t_aff, _ = bench(fuzzgpu.needleman_wunsch_affine_batch, query, batch, 2, -1, -3, -1)
-
-        print(f"{n:>8} | {t_lin*1000:>11.2f}ms | {t_aff*1000:>11.2f}ms")
-    print()
-
-
-def benchmark_fuzz_ratio():
-    print("=" * 95)
-    print("FUZZ RATIO BATCH: 1 query x N candidates")
-    print("=" * 95)
-    print(f"{'Size':>8} | {'fuzzgpu':>10} | {'rapidfuzz':>10} | {'speedup':>8}")
-    print("-" * 55)
-
-    query = "hello world this is a test"
-    candidates = [f"{random_string(5)} {random_string(5)} {random_string(5)}" for _ in range(50_000)]
-
-    for n in [100, 1_000, 5_000, 10_000, 50_000]:
-        batch = candidates[:n]
-
-        t_gpu, _ = bench(fuzzgpu.fuzz_ratio_batch, query, batch)
-        t_rf, _ = bench(lambda: [rapidfuzz.fuzz.ratio(query, c) for c in batch])
-
-        speedup = t_rf / t_gpu if t_gpu > 0 else float("inf")
-        print(f"{n:>8} | {t_gpu*1000:>9.2f}ms | {t_rf*1000:>9.2f}ms | {speedup:>7.2f}x")
-    print()
+    fuzzgpu.set_cpu_only(False)
 
 
 if __name__ == "__main__":
-    print(f"fuzzgpu {fuzzgpu.__version__}")
-    print(f"GPU: {fuzzgpu.gpu_info()}")
-    print(f"Python: {sys.version}")
-    print(f"rapidfuzz: {rapidfuzz.__version__}")
-    print()
-
-    benchmark_levenshtein_batch()
-    benchmark_damerau_batch()
-    benchmark_levenshtein_cdist()
-    benchmark_jaro_winkler()
-    benchmark_needleman_affine()
-    benchmark_fuzz_ratio()
-
-    print("=" * 95)
-    print("BENCHMARKS COMPLETED")
-    print("=" * 95)
+    main()

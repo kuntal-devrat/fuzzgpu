@@ -42,8 +42,23 @@ fn any_string(max_len: usize) -> impl Strategy<Value = String> {
     prop_oneof![ascii_string(max_len), unicode_string(max_len)]
 }
 
+/// ASCII string, length `1..=max_len` (non-empty: the row-wise Myers cdist
+/// kernel requires a non-empty pattern per row).
+fn ascii_string_nz(max_len: usize) -> impl Strategy<Value = String> {
+    (1usize..=max_len).prop_flat_map(move |len| {
+        prop::collection::vec(prop::char::range('a', 'z'), len..=len)
+            .prop_map(|chars| chars.into_iter().collect())
+    })
+}
+
 fn any_pair(max_len: usize) -> impl Strategy<Value = (String, String)> {
     (any_string(max_len), any_string(max_len))
+}
+
+/// A pair of ASCII strings (the GPU Damerau kernel's gate is ASCII ≤ 32
+/// chars, so ASCII pairs are what actually runs on the shader).
+fn ascii_pair(max_len: usize) -> impl Strategy<Value = (String, String)> {
+    (ascii_string(max_len), ascii_string(max_len))
 }
 
 /// A pair of ASCII strings with exactly equal length — needed for edge cases
@@ -490,6 +505,8 @@ proptest! {
 mod gpu_differential {
     use super::*;
     use std::sync::{Mutex, MutexGuard};
+    use fuzzgpu_core::damerau::damerau_levenshtein_cdist;
+    use fuzzgpu_core::damerau::gpu_ext::GpuDamerauKernel;
     use fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel;
     use fuzzgpu_core::jaro::jaro_winkler_cdist_cpu;
     use fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel;
@@ -557,6 +574,37 @@ mod gpu_differential {
         }
     }
 
+    fn gpu_damerau_or_skip() -> Option<&'static GpuDamerauKernel> {
+        match GpuDamerauKernel::get() {
+            Ok(k) => Some(k),
+            Err(e) => {
+                if require_gpu() {
+                    panic!("FUZZGPU_REQUIRE_GPU is set but no usable GPU device: {}", e);
+                }
+                eprintln!("skipping GPU differential test (no usable device): {}", e);
+                None
+            }
+        }
+    }
+
+    /// Force GPU dispatch regardless of metric/auto routing: Jaro and Damerau
+    /// auto-route to CPU on integrated GPUs (where the SIMD path wins), so the
+    /// differentials must set an explicit override to actually exercise the
+    /// shaders. RAII guard restores `None` on drop; the dispatch lock prevents
+    /// races with other tests sharing the global override.
+    struct ForceGpu;
+    impl ForceGpu {
+        fn new() -> Self {
+            fuzzgpu_core::gpu::GpuEngine::set_gpu_threshold(Some(1));
+            ForceGpu
+        }
+    }
+    impl Drop for ForceGpu {
+        fn drop(&mut self) {
+            fuzzgpu_core::gpu::GpuEngine::set_gpu_threshold(None);
+        }
+    }
+
     /// GPU computes in f32, CPU in f64 — compare with epsilon.
     fn assert_close(a: &[f64], b: &[f64]) {
         assert_eq!(a.len(), b.len(), "length mismatch: {} vs {}", a.len(), b.len());
@@ -621,6 +669,27 @@ mod gpu_differential {
             prop_assert_eq!(gpu, cpu, "GPU Levenshtein matrix must match CPU");
         }
 
+        /// Row-wise Myers cdist: every query ASCII 1..=64 bytes (the Peq
+        /// pattern) and every text ASCII of ANY length — including > 256
+        /// chars, which the general DP matrix kernel rejects. Exercises the
+        /// shared-Peq-per-row kernel + the long-text loop.
+        #[test]
+        fn levenshtein_gpu_matrix_myers_matches_cpu(
+            a in prop::collection::vec(ascii_string_nz(64), 20..=20),
+            b in prop::collection::vec(ascii_string(300), 40..=40),
+        ) {
+            let _gpu_guard = gpu_test_lock();
+            let Some(kernel) = gpu_levenshtein_or_skip() else { return Ok(()); };
+            let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
+            // 20x40 = 800 cells, above the iGPU threshold (500) so the GPU
+            // matrix path is taken, and every query is ASCII <= 64 so the
+            // row-wise Myers route is selected.
+            let gpu = kernel.compute_matrix(&refs_a, &refs_b).expect("GPU Myers matrix should succeed");
+            let cpu = levenshtein_cdist_cpu(&refs_a, &refs_b);
+            prop_assert_eq!(gpu, cpu, "GPU row-wise Myers matrix must match CPU");
+        }
+
         /// Jaro-Winkler batch: 1000 random pairs, with appended > 128-char
         /// pairs so the CPU-fallback routing inside `compute_batch` stays
         /// exercised alongside the GPU kernel.
@@ -628,6 +697,7 @@ mod gpu_differential {
         fn jaro_gpu_batch_matches_cpu(pairs in prop::collection::vec(any_pair(32), 1000..=1000)) {
             let _gpu_guard = gpu_test_lock();
             let Some(kernel) = gpu_jaro_or_skip() else { return Ok(()); };
+            let _force = ForceGpu::new();
             let mut pairs = pairs;
             // Oversized (> 128 chars) pairs must route to CPU inside compute_batch().
             pairs.push(("a".repeat(140), "b".repeat(140)));
@@ -683,6 +753,7 @@ mod gpu_differential {
         ) {
             let _gpu_guard = gpu_test_lock();
             let Some(kernel) = gpu_jaro_or_skip() else { return Ok(()); };
+            let _force = ForceGpu::new();
             let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
             let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
             let gpu = kernel.compute_matrix(&refs_a, &refs_b, 0.1).expect("GPU Jaro matrix should succeed");
@@ -690,6 +761,279 @@ mod gpu_differential {
             for (grow, crow) in gpu.iter().zip(cpu.iter()) {
                 assert_close(grow, crow);
             }
+        }
+
+        /// Damerau-Levenshtein batch: 1000 random ASCII pairs (all ≤ 32 chars,
+        /// so every pair runs on the GPU's Lowrance-Wagner shader), plus
+        /// appended > 32-char ASCII, Unicode, and non-ASCII pairs that must
+        /// route through the CPU fallback inside `compute_batch`. The GPU
+        /// result must be bit-exact with the CPU reference (both unrestricted
+        /// Lowrance-Wagner), which is stronger than the Jaro epsilon compare.
+        #[test]
+        fn damerau_gpu_batch_matches_cpu(pairs in prop::collection::vec(ascii_pair(32), 1000..=1000)) {
+            let _gpu_guard = gpu_test_lock();
+            let Some(kernel) = gpu_damerau_or_skip() else { return Ok(()); };
+            let _force = ForceGpu::new();
+            let mut pairs = pairs;
+            // > 32 chars (CPU fallback) and Unicode (non-ASCII gate -> CPU).
+            let long_a = "a".repeat(40);
+            let long_b = "b".repeat(40);
+            let uni_a = "héllo wörld".to_string();
+            let uni_b = "héllo".to_string();
+            pairs.push((long_a, long_b));
+            pairs.push((uni_a, uni_b));
+            let refs: Vec<(&str, &str)> =
+                pairs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+            let gpu = kernel.compute_batch(&refs).expect("GPU Damerau batch should succeed");
+            let cpu: Vec<u32> = refs.iter()
+                .map(|(a, b)| damerau_levenshtein_distance(a, b))
+                .collect();
+            prop_assert_eq!(&gpu, &cpu, "GPU Damerau batch must match CPU");
+            prop_assert!(gpu.iter().all(|&d| d != u32::MAX), "u32::MAX sentinel leaked");
+        }
+
+        /// Damerau-Levenshtein matrix: 32×32 ASCII strings, all within the
+        /// 32-char shader cap, so the 2D Lowrance-Wagner matrix kernel is
+        /// exercised on every case.
+        #[test]
+        fn damerau_gpu_matrix_matches_cpu(
+            a in prop::collection::vec(ascii_string(32), 32..=32),
+            b in prop::collection::vec(ascii_string(32), 32..=32),
+        ) {
+            let _gpu_guard = gpu_test_lock();
+            let Some(kernel) = gpu_damerau_or_skip() else { return Ok(()); };
+            let _force = ForceGpu::new();
+            let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
+            let gpu = kernel.compute_matrix(&refs_a, &refs_b).expect("GPU Damerau matrix should succeed");
+            let cpu = damerau_levenshtein_cdist(&refs_a, &refs_b);
+            prop_assert_eq!(gpu, cpu, "GPU Damerau matrix must match CPU");
+        }
+    }
+
+    /// Wavefront path: the anti-diagonal wavefront kernel must agree exactly
+    /// with the CPU Gotoh oracle. Called directly (it is an explicit API, not
+    /// the default routing — measured ~140x slower than the serial shader on
+    /// iGPU batches). Deterministic ASCII strings (70..=100 chars), an
+    /// identical pair, an empty pair, a one-char pair, and a Unicode long
+    /// pair (the wavefront compares u32 char codes). (Plain test, outside the
+    /// `proptest!` block.)
+    #[test]
+    fn needleman_affine_gpu_wavefront_matches_cpu() {
+        let _gpu_guard = gpu_test_lock();
+        let Some(kernel) = gpu_needleman_affine_or_skip() else { return; };
+
+        fn gen_long(count: usize, seed: u64) -> Vec<String> {
+            let mut state = seed;
+            let mut out = Vec::with_capacity(count);
+            for _ in 0..count {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let len = 70 + ((state >> 33) as usize % 31); // 70..=100
+                let mut s = String::with_capacity(len);
+                for _ in 0..len {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
+                }
+                out.push(s);
+            }
+            out
+        }
+
+        let (match_score, mismatch_score, gap_open, gap_extend) = (2i64, -1i64, -3i64, -1i64);
+        let a = gen_long(600, 0xACE0);
+        let b = gen_long(600, 0xFACE);
+        let mut pairs: Vec<(String, String)> = a.into_iter().zip(b).collect();
+        // Edge cases: identical, empty, single-char, 64/65-char boundary,
+        // Unicode (wavefront compares u32 char codes).
+        pairs.push(("x".repeat(65), "x".repeat(65)));
+        pairs.push(("".into(), "".into()));
+        pairs.push(("a".into(), "b".into()));
+        pairs.push(("x".repeat(64), "y".repeat(64)));
+        pairs.push(("x".repeat(65), "y".repeat(65)));
+        pairs.push(("é".repeat(80), "è".repeat(80)));
+        let refs: Vec<(&str, &str)> =
+            pairs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let indices: Vec<usize> = (0..refs.len()).collect();
+
+        let gpu = kernel
+            .compute_gpu_wavefront(&refs, &indices, match_score, mismatch_score, gap_open, gap_extend)
+            .expect("GPU wavefront dispatch should succeed");
+        let cpu: Vec<i64> = refs.iter()
+            .map(|(a, b)| {
+                let ca: Vec<char> = a.chars().collect();
+                let cb: Vec<char> = b.chars().collect();
+                naive_needleman_wunsch_affine(&ca, &cb, match_score, mismatch_score, gap_open, gap_extend)
+            })
+            .collect();
+        let gpu_i64: Vec<i64> = gpu.iter().map(|&s| s as i64).collect();
+        assert_eq!(gpu_i64, cpu, "GPU wavefront must match the CPU Gotoh oracle");
+    }
+
+    /// Transposition-heavy edge cases must be bit-exact through the GPU
+    /// Damerau kernel: adjacent transpositions, non-adjacent ("ca"/"abc" = 2,
+    /// which optimal-string-alignment gets wrong), multi-transposition, and
+    /// the classic "a cat"/"an act" (true Damerau = 2). (Plain test — no
+    /// randomness, fast.)
+    #[test]
+    fn damerau_gpu_transposition_edges_match_cpu() {
+        let _gpu_guard = gpu_test_lock();            let Some(kernel) = gpu_damerau_or_skip() else { return; };
+            let _force = ForceGpu::new();
+
+        let pairs: Vec<(&str, &str)> = vec![
+            ("", ""),
+            ("a", ""),
+            ("", "b"),
+            ("same", "same"),
+            ("ab", "ba"),
+            ("abc", "cba"),
+            ("ca", "abc"),
+            ("a cat", "an act"),
+            ("sitting", "kitten"),
+            ("dwayne", "duane"),
+            ("abab", "baba"),
+            ("xyz", "zyx"),
+            ("abcdef", "abcfed"),
+            ("abcdefgh", "abghefcd"),
+        ];
+        let gpu = kernel.compute_batch(&pairs).expect("GPU Damerau batch should succeed");
+        let cpu: Vec<u32> = pairs.iter()
+            .map(|(a, b)| damerau_levenshtein_distance(a, b))
+            .collect();
+        assert_eq!(gpu, cpu, "GPU Damerau transposition edges must match CPU");
+    }
+
+    /// Jaro's classic transposition/shared-prefix cases through the GPU
+    /// bitmap matcher (identical semantics to the CPU reference within 1e-4).
+    #[test]
+    fn jaro_gpu_classic_cases_match_cpu() {
+        let _gpu_guard = gpu_test_lock();
+        let Some(kernel) = gpu_jaro_or_skip() else { return; };
+        let _force = ForceGpu::new();
+
+        let pairs: Vec<(&str, &str)> = vec![
+            ("", ""),
+            ("a", ""),
+            ("martha", "martha"),
+            ("martha", "marhta"),
+            ("dwayne", "duane"),
+            ("dixon", "dicksonx"),
+            ("ab", "ba"),
+            ("a cat", "an act"),
+            ("crate", "trace"),
+            ("", "xyz"),
+            ("abcdef", "abcfed"),
+        ];
+        let gpu = kernel.compute_batch(&pairs, 0.1).expect("GPU Jaro batch should succeed");
+        let cpu: Vec<f64> = pairs.iter()
+            .map(|(a, b)| jaro_winkler(a, b, 0.1))
+            .collect();
+        assert_close(&gpu, &cpu);
+    }
+
+    /// The batched API (N ops queued, one dispatch + readback) must return
+    /// exactly what N sequential per-op calls return, for all three kernels
+    /// — including CPU-routed edge cases inside each op. (Lives outside the
+    /// `proptest!` block so it runs as a plain deterministic test.)
+    #[test]
+    fn batch_api_matches_sequential_per_op() {
+        let _gpu_guard = gpu_test_lock();
+        // Force GPU dispatch: the Jaro/Damerau metric routing sends small and
+        // mid-size batches to CPU on integrated GPUs, which would silently
+        // drop the batched-API coverage.
+        let _force = ForceGpu::new();
+
+        // Deterministic ASCII strings (same LCG as the lib tests).
+        fn gen(count: usize, seed: u64) -> Vec<String> {
+            let mut state = seed;
+            let mut out = Vec::with_capacity(count);
+            for _ in 0..count {
+                let len = 4 + ((state >> 33) % 16) as usize;
+                let mut s = String::with_capacity(len);
+                for _ in 0..len {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
+                }
+                out.push(s);
+            }
+            out
+        }
+
+        let a = gen(600, 0x1111);
+        let b = gen(600, 0x2222);
+        let mut op1: Vec<(&str, &str)> =
+            a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+        op1[0] = ("", "");
+        op1[1] = ("", "xyz");
+        op1[2] = ("identical", "identical");
+
+        let long = "a".repeat(300);
+        let b100 = "b".repeat(100);
+        let c100 = "c".repeat(100);
+        let op2: Vec<(&str, &str)> = vec![
+            ("kitten", "sitting"),
+            (&long, "short"),
+            ("日本語", "日本語のテスト"),
+            // 100 chars: routes to the long GPU kernel (65..=256), not CPU.
+            (&b100, &c100),
+        ];
+        let op3: Vec<(&str, &str)> = vec![("MARTHA", "MARHTA"), ("dwayne", "duane"), ("", "x")];
+
+        // Levenshtein.
+        if let Some(kernel) = gpu_levenshtein_or_skip() {
+            let expected = vec![
+                kernel.compute(&op1).expect("op1 compute"),
+                kernel.compute(&op2).expect("op2 compute"),
+                kernel.compute(&op3).expect("op3 compute"),
+            ];
+            let mut batch = kernel.batch();
+            batch.add(&op1);
+            batch.add(&op2);
+            batch.add(&op3);
+            assert_eq!(
+                batch.execute().expect("levenshtein batch"),
+                expected,
+                "Levenshtein batch must equal sequential per-op compute"
+            );
+        }
+
+        // Jaro-Winkler.
+        if let Some(kernel) = gpu_jaro_or_skip() {
+            let p = 0.1;
+            let expected = vec![
+                kernel.compute_batch(&op1, p).expect("op1 compute_batch"),
+                kernel.compute_batch(&op2, p).expect("op2 compute_batch"),
+                kernel.compute_batch(&op3, p).expect("op3 compute_batch"),
+            ];
+            let mut batch = kernel.batch(p).expect("jaro batch creation");
+            batch.add(&op1);
+            batch.add(&op2);
+            batch.add(&op3);
+            let got = batch.execute().expect("jaro batch");
+            for (i, (g, e)) in got.iter().zip(&expected).enumerate() {
+                assert_eq!(g.len(), e.len(), "jaro op {i} length");
+                for (j, (&gv, &ev)) in g.iter().zip(e).enumerate() {
+                    assert!((gv - ev).abs() < 1e-4, "jaro op {i} pair {j}: batch {gv} vs compute {ev}");
+                }
+            }
+        }
+
+        // Affine Needleman-Wunsch.
+        if let Some(kernel) = gpu_needleman_affine_or_skip() {
+            let (m, mm, go, ge) = (2i64, -1i64, -3i64, -1i64);
+            let expected = vec![
+                kernel.compute_batch(&op1, m, mm, go, ge).expect("op1 affine"),
+                kernel.compute_batch(&op2, m, mm, go, ge).expect("op2 affine"),
+                kernel.compute_batch(&op3, m, mm, go, ge).expect("op3 affine"),
+            ];
+            let mut batch = kernel.batch(m, mm, go, ge);
+            batch.add(&op1);
+            batch.add(&op2);
+            batch.add(&op3);
+            assert_eq!(
+                batch.execute().expect("needleman batch"),
+                expected,
+                "Needleman batch must equal sequential per-op compute_batch"
+            );
         }
     }
 }

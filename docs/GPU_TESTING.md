@@ -105,6 +105,17 @@ kernel test modules.
    `let _gpu_guard = crate::gpu::gpu_test_lock();` so tests still run on
    parallel threads but dispatch one at a time. (`FUZZGPU_SKIP_DISPATCH_LOCK=1`
    bypasses this — reproduction/bisection only, never set it in CI.)
+
+   **Production is protected too.** The test lock is `#[cfg(test)]`-only, but
+   the same crash class applies to any multi-threaded caller of the GPU
+   bindings (the Python bindings release the GIL around kernel calls, so two
+   Python threads can dispatch concurrently). `GpuEngine` therefore carries a
+   production `dispatch_lock` that every public GPU entry point
+   (`compute` / `compute_matrix` / `compute_batch` / `batch().execute()`, all
+   kernels) holds for the duration of its dispatch + readback — at most one
+   submission is ever in flight. `test_concurrent_dispatch_is_serialized_and_correct`
+   stress-tests this with 8 threads × 20 GPU dispatches. The same
+   `FUZZGPU_SKIP_DISPATCH_LOCK` env var disables both locks (repro only).
 2. **Skip cleanly without a device.** Acquire the kernel through the module's
    `gpu_kernel_or_skip()` helper; on failure it logs and returns `None`, and
    the test returns early. Under `FUZZGPU_REQUIRE_GPU=1` (set by CI's
