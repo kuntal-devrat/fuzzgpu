@@ -45,14 +45,24 @@ impl GpuEngine {
     async fn new_inner() -> Result<Arc<Self>> {
         let instance = wgpu::Instance::default();
 
-        let adapter = instance
+        let adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or_else(|| FuzzGpuError::NoDevice("No GPU adapter found".into()))?;
+        {
+            Some(a) => a,
+            None => instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::None,
+                    compatible_surface: None,
+                    force_fallback_adapter: true,
+                })
+                .await
+                .ok_or_else(|| FuzzGpuError::NoDevice("No GPU adapter found".into()))?,
+        };
 
         let info = GpuInfo {
             name: adapter.get_info().name.clone(),

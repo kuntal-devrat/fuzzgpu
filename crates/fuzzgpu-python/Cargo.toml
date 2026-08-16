@@ -2,6 +2,11 @@
 name = "fuzzgpu-python"
 version = "0.1.0"
 edition = "2021"
+description = "Python bindings for FuzzGPU: GPU-accelerated fuzzy string matching engine"
+license = "MIT"
+repository = "https://github.com/kuntal-devrat/fuzzgpu"
+homepage = "https://github.com/kuntal-devrat/fuzzgpu"
+authors = ["Devrat Kuntal"]
 
 [lib]
 name = "fuzzgpu"

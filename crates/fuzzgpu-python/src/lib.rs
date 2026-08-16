@@ -9,11 +9,13 @@ use fuzzgpu_core::gpu::GpuEngine;
 fn levenshtein_distance(py: Python, a: &str, b: &str) -> PyResult<u32> {
     #[cfg(feature = "gpu")]
     {
-        let kernel = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        py.allow_threads(|| kernel.compute(&[(a, b)]))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-            .map(|r| r[0])
+        if let Ok(kernel) = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get() {
+            if let Ok(res) = py.allow_threads(|| kernel.compute(&[(a, b)])) {
+                return Ok(res[0]);
+            }
+        }
+        let _ = py;
+        Ok(fuzzgpu_core::levenshtein_distance_raw(a, b))
     }
     #[cfg(not(feature = "gpu"))]
     {
@@ -27,10 +29,13 @@ fn levenshtein_batch(py: Python, query: String, candidates: Vec<String>) -> PyRe
     let pairs: Vec<(&str, &str)> = candidates.iter().map(|c| (query.as_str(), c.as_str())).collect();
     #[cfg(feature = "gpu")]
     {
-        let kernel = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        py.allow_threads(|| kernel.compute(&pairs))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        if let Ok(kernel) = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get() {
+            if let Ok(res) = py.allow_threads(|| kernel.compute(&pairs)) {
+                return Ok(res);
+            }
+        }
+        let kernel = fuzzgpu_core::LevenshteinKernel;
+        kernel.compute(&pairs).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
     #[cfg(not(feature = "gpu"))]
     {
@@ -44,10 +49,12 @@ fn levenshtein_cdist(py: Python, list_a: Vec<String>, list_b: Vec<String>) -> Py
     let refs_b: Vec<&str> = list_b.iter().map(|s| s.as_str()).collect();
     #[cfg(feature = "gpu")]
     {
-        let kernel = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        py.allow_threads(|| kernel.compute_matrix(&refs_a, &refs_b))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        if let Ok(kernel) = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get() {
+            if let Ok(res) = py.allow_threads(|| kernel.compute_matrix(&refs_a, &refs_b)) {
+                return Ok(res);
+            }
+        }
+        py.allow_threads(|| Ok(fuzzgpu_core::levenshtein::levenshtein_cdist_cpu(&refs_a, &refs_b)))
     }
     #[cfg(not(feature = "gpu"))]
     {
@@ -121,10 +128,13 @@ fn jaro_winkler_batch_fn(py: Python, query: String, candidates: Vec<String>, p: 
     let pairs: Vec<(&str, &str)> = candidates.iter().map(|c| (query.as_str(), c.as_str())).collect();
     #[cfg(feature = "gpu")]
     {
-        let kernel = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        py.allow_threads(|| kernel.compute_batch(&pairs, p))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        if let Ok(kernel) = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get() {
+            if let Ok(res) = py.allow_threads(|| kernel.compute_batch(&pairs, p)) {
+                return Ok(res);
+            }
+        }
+        let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+        py.allow_threads(|| Ok(fuzzgpu_core::jaro_winkler_batch(&query, &refs, p)))
     }
     #[cfg(not(feature = "gpu"))]
     {
@@ -139,10 +149,12 @@ fn jaro_winkler_cdist(py: Python, list_a: Vec<String>, list_b: Vec<String>, p: f
     let refs_b: Vec<&str> = list_b.iter().map(|s| s.as_str()).collect();
     #[cfg(feature = "gpu")]
     {
-        let kernel = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        py.allow_threads(|| kernel.compute_matrix(&refs_a, &refs_b, p))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        if let Ok(kernel) = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get() {
+            if let Ok(res) = py.allow_threads(|| kernel.compute_matrix(&refs_a, &refs_b, p)) {
+                return Ok(res);
+            }
+        }
+        py.allow_threads(|| Ok(fuzzgpu_core::jaro::jaro_winkler_cdist_cpu(&refs_a, &refs_b, p)))
     }
     #[cfg(not(feature = "gpu"))]
     {
@@ -209,9 +221,10 @@ fn jaro_optimized(a: &str, b: &str) -> PyResult<f64> {
 fn gpu_info() -> PyResult<String> {
     #[cfg(feature = "gpu")]
     {
-        let engine = GpuEngine::get()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        Ok(format!("{} ({})", engine.info.name, engine.info.backend))
+        match GpuEngine::get() {
+            Ok(engine) => Ok(format!("{} ({})", engine.info.name, engine.info.backend)),
+            Err(_) => Ok("CPU-only fallback mode (no GPU device detected)".into()),
+        }
     }
     #[cfg(not(feature = "gpu"))]
     { Ok("CPU-only mode (no GPU)".into()) }

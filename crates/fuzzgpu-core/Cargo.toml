@@ -3,6 +3,10 @@ name = "fuzzgpu-core"
 version = "0.1.0"
 edition = "2021"
 description = "GPU-accelerated fuzzy string matching engine"
+license = "MIT"
+repository = "https://github.com/kuntal-devrat/fuzzgpu"
+homepage = "https://github.com/kuntal-devrat/fuzzgpu"
+authors = ["Devrat Kuntal"]
 
 [features]
 default = ["gpu"]
