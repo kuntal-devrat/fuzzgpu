@@ -18,5 +18,5 @@ gpu = ["fuzzgpu-core/gpu"]
 
 [dependencies]
 fuzzgpu-core = { path = "../fuzzgpu-core" }
-pyo3 = { workspace = true }
+pyo3 = { workspace = true, features = ["abi3-py39"] }
 pollster = { workspace = true }
