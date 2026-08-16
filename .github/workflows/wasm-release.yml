@@ -1,0 +1,156 @@
+name: Release wasm package
+
+# Versioned release of the WebAssembly package (the pkg/ output of
+# build-wasm.sh: web-target, release profile). This is a separate artifact
+# from the Python wheels — those are published by release.yml on `v*` tags —
+# so it uses its own `wasm-v<version>` tag and GitHub release, avoiding any
+# collision with the PyPI release path.
+#
+# Manual trigger only. Give the new semver version (e.g. 0.2.0). The workflow:
+#   1. bumps crates/fuzzgpu-wasm/Cargo.toml (the wasm package version)
+#   2. runs the wasm-bindgen test suite as a gate
+#   3. builds with the exact user-facing script (build-wasm.sh)
+#   4. verifies the artifacts and that pkg/package.json carries the new version
+#   5. commits the bump, tags wasm-v<version>, and attaches the .wasm + support
+#      files to a GitHub release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New wasm package version (semver, e.g. 0.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  wasm-release:
+    name: wasm v${{ inputs.version }} → GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      - name: Validate version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::version must be semver like 0.2.0 (got: $VERSION)"
+            exit 1
+          fi
+
+      # fuzzgpu ships core/python/wasm in lockstep — the wasm package version
+      # must equal the core crate's, or the browser artifact would drift from
+      # the Python package on the same release. Cut the wasm release at the
+      # current core version (bump core first if a new version is wanted); only
+      # relax this check deliberately if independent wasm versions are ever
+      # intended.
+      - name: Enforce version parity with core
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          CORE_VERSION=$(grep -m1 '^version' crates/fuzzgpu-core/Cargo.toml | sed 's/.*= *"\(.*\)"/\1/')
+          if [ "$VERSION" != "$CORE_VERSION" ]; then
+            echo "::error::wasm version $VERSION does not match core crate version $CORE_VERSION"
+            echo "fuzzgpu releases core/python/wasm in lockstep — cut the wasm release at the"
+            echo "current core version, or bump the core crate first."
+            exit 1
+          fi
+          echo "parity ok: wasm and core both at $VERSION"
+
+      - name: Bump wasm crate version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          CURRENT=$(grep -m1 '^version' crates/fuzzgpu-wasm/Cargo.toml | sed 's/.*= *"\(.*\)"/\1/')
+          echo "current: $CURRENT -> new: $VERSION"
+          [ "$CURRENT" != "$VERSION" ] || {
+            echo "::error::version $VERSION is already the current wasm crate version"
+            exit 1
+          }
+          python3 - "$VERSION" <<'EOF'
+          import re, sys
+          path = "crates/fuzzgpu-wasm/Cargo.toml"
+          new = sys.argv[1]
+          text = open(path).read()
+          text, n = re.subn(r'^version\s*=\s*"[^"]*"', f'version = "{new}"', text, count=1, flags=re.M)
+          if n != 1:
+              sys.exit("could not find the version line in crates/fuzzgpu-wasm/Cargo.toml")
+          open(path, "w").write(text)
+          print("bumped to", new)
+          EOF
+
+      # Gate: the #[wasm_bindgen_test] suite must pass before anything ships.
+      - name: Test gate (wasm-bindgen suite, Node)
+        run: cd crates/fuzzgpu-wasm && wasm-pack test --node
+
+      # The exact script users run — release profile (opt-level=s, lto), web
+      # target, output to pkg/ at the repo root.
+      - name: Build wasm package
+        run: bash build-wasm.sh
+
+      - name: Verify built package
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test -s pkg/fuzzgpu_wasm.js
+          test -s pkg/fuzzgpu_wasm_bg.wasm
+          test -s pkg/fuzzgpu_wasm.d.ts
+          test -s pkg/package.json
+          # Wasm binary magic: \0asm
+          [ "$(head -c 4 pkg/fuzzgpu_wasm_bg.wasm | od -An -tx1 | tr -d ' ')" = "0061736d" ]
+          node -e "const p = require('./pkg/package.json'); if (p.version !== process.argv[1]) { console.error('version mismatch:', p.version, '!=', process.argv[1]); process.exit(1); } console.log('pkg/package.json version ok:', p.version)" "$VERSION"
+
+      - name: Commit version bump
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/fuzzgpu-wasm/Cargo.toml crates/fuzzgpu-wasm/Cargo.lock
+          if git diff --cached --quiet; then
+            echo "no manifest changes to commit (bump was a no-op?)"
+          else
+            git commit -m "chore(wasm): bump wasm crate to v$VERSION"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Tag and create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          TAG="wasm-v$VERSION"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::tag $TAG already exists — delete it or pick a new version"
+            exit 1
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+          # Convenience bundle of the whole published package.
+          zip -j "fuzzgpu-wasm-$VERSION.zip" \
+            pkg/fuzzgpu_wasm.js pkg/fuzzgpu_wasm_bg.wasm \
+            pkg/fuzzgpu_wasm.d.ts pkg/package.json
+          gh release create "$TAG" \
+            --title "fuzzgpu-wasm v$VERSION" \
+            --notes "WebAssembly package **v$VERSION** — web-target, release profile (opt-level=s, lto). i64 Needleman-Wunsch scores exposed as JS BigInt; GPU-free CPU fallbacks; built and gated by CI (wasm-bindgen suite). Attached: the compiled \`.wasm\` module, the JS glue, TypeScript types, \`package.json\`, and a zip of the full \`pkg/\` output." \
+            --generate-notes \
+            pkg/fuzzgpu_wasm_bg.wasm \
+            pkg/fuzzgpu_wasm.js \
+            pkg/fuzzgpu_wasm.d.ts \
+            pkg/package.json \
+            "fuzzgpu-wasm-$VERSION.zip"

@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      differential-cases:
+        description: 'Proptest cases for the nightly deep differential run'
+        type: number
+        default: 256
+  schedule:
+    # Nightly at 02:00 UTC: deep-fuzz tier (256 cases, 4x the push-time 64).
+    - cron: '0 2 * * *'
 
 jobs:
   test:
@@ -37,3 +45,280 @@ jobs:
 
       - name: Run Python Test Suite
         run: pytest tests -v
+
+  gpu-differential:
+    name: GPU differential tests (software Vulkan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install software Vulkan adapter (Mesa lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+
+      - name: Verify a Vulkan adapter is visible
+        run: |
+          vulkaninfo --summary
+          vulkaninfo --summary | grep -iE 'lava|llvmpipe' || { echo "lavapipe not found"; exit 1; }
+
+      # `FUZZGPU_REQUIRE_GPU=1` turns the usual "skip when no device" behavior
+      # into a hard failure, so this job genuinely exercises the GPU kernels,
+      # shader compilation, buffer sizing, and the differential proptests against
+      # the CPU oracles on every push — it cannot silently skip.
+      - name: Run GPU differential property tests
+        env:
+          FUZZGPU_REQUIRE_GPU: '1'
+          WGPU_BACKEND: vulkan
+        run: cargo test -p fuzzgpu-core --test differential
+
+      - name: Run GPU kernel unit tests
+        env:
+          FUZZGPU_REQUIRE_GPU: '1'
+          WGPU_BACKEND: vulkan
+        run: cargo test -p fuzzgpu-core --lib gpu
+
+  gpu-stress:
+    name: GPU timeout determinism (serialized loop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install software Vulkan adapter (Mesa lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+
+      - name: Verify a Vulkan adapter is visible
+        run: |
+          vulkaninfo --summary | grep -iE 'lava|llvmpipe' || { echo "lavapipe not found"; exit 1; }
+
+      # Repeats the full GPU kernel suite — including the fault-injection
+      # timeout/buffer/shader tests — with FUZZGPU_REQUIRE_GPU=1, so a missing
+      # device fails instead of skipping. GPU_TEST_DISPATCH_LOCK serializes
+      # actual dispatch while tests still run on parallel threads; the loop
+      # continuously verifies the timeout faults stay deterministic. This is
+      # the same stress pattern that exposed the parallel-dispatch crash on
+      # Intel iGPUs during local testing.
+      - name: Run GPU suite in a serialized loop
+        env:
+          FUZZGPU_REQUIRE_GPU: '1'
+          WGPU_BACKEND: vulkan
+          ITERATIONS: '25'
+        run: |
+          for i in $(seq 1 "${ITERATIONS}"); do
+            echo "GPU suite iteration ${i}/${ITERATIONS}"
+            if ! cargo test -p fuzzgpu-core --lib gpu -- --test-threads=8 2>&1 | grep -q 'test result: ok'; then
+              echo "FAILED at iteration ${i}/${ITERATIONS}"
+              exit 1
+            fi
+          done
+          echo "GPU suite: all ${ITERATIONS} iterations passed"
+
+  differential-deep:
+    name: Differential proptests (64 cases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install software Vulkan adapter (Mesa lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+
+      - name: Verify a Vulkan adapter is visible
+        run: |
+          vulkaninfo --summary | grep -iE 'lava|llvmpipe' || { echo "lavapipe not found"; exit 1; }
+
+      # Deep property-test run at 64 cases (default is 10). The GPU
+      # differentials' case count follows PROPTEST_CASES too, so this deep-
+      # fuzzes the whole harness — CPU differentials and GPU-vs-oracle alike.
+      # FUZZGPU_REQUIRE_GPU keeps the GPU tests honest on the software adapter.
+      # ~8 s at 64 cases on a real GPU; slower on lavapipe but well within
+      # limits, and it runs in parallel with the other jobs.
+      - name: Run differential suite at 64 cases
+        env:
+          PROPTEST_CASES: '64'
+          FUZZGPU_REQUIRE_GPU: '1'
+          WGPU_BACKEND: vulkan
+        run: cargo test -p fuzzgpu-core --test differential
+
+  differential-nightly:
+    # Nightly-only deep-fuzz tier. Gated so it never runs on push/PR (where
+    # differential-deep at 64 cases already gates the GPU paths); on a schedule
+    # trigger the workflow_dispatch inputs fall back to their defaults, so this
+    # runs at 256 cases unless manually dispatched with a custom count.
+    name: Differential proptests nightly (${{ inputs.differential-cases }} cases)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install software Vulkan adapter (Mesa lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+
+      - name: Verify a Vulkan adapter is visible
+        run: |
+          vulkaninfo --summary | grep -iE 'lava|llvmpipe' || { echo "lavapipe not found"; exit 1; }
+
+      # Nightly deep-fuzz tier: 256 cases (4x the push-time 64, 25.6x the
+      # default 10). The GPU differentials follow PROPTEST_CASES, so this
+      # deep-fuzzes the whole harness — CPU differentials and GPU-vs-oracle
+      # alike — on the software adapter. Measured ~33 s at 256 cases on a real
+      # GPU; slower on lavapipe but comfortable for a nightly. Catches rare
+      # regressions that a 10-case push run would miss.
+      - name: Run differential suite at ${{ inputs.differential-cases }} cases
+        env:
+          PROPTEST_CASES: ${{ inputs.differential-cases }}
+          FUZZGPU_REQUIRE_GPU: '1'
+          WGPU_BACKEND: vulkan
+        run: cargo test -p fuzzgpu-core --test differential
+
+  wasm-tests:
+    name: WebAssembly tests (BigInt API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      # Rust #[wasm_bindgen_test]s run inside the wasm module (i64 is native
+      # there, so these pin the i64 signatures and the large-score math).
+      - name: Run wasm-bindgen tests (Node)
+        run: cd crates/fuzzgpu-wasm && wasm-pack test --node
+
+      # Run the same #[wasm_bindgen_test] suite in a real browser engine, not
+      # just Node — wasm-pack drives Chrome through chromedriver (installed
+      # alongside by setup-chrome), so this catches browser-specific wasm
+      # behavior (e.g. WebAssembly.Module semantics, BigInt interop paths) that
+      # Node's different embedding would never exercise.
+      #
+      # WASM_BINDGEN_USE_BROWSER=1 is REQUIRED: wasm-bindgen-test defaults to
+      # Node mode, and wasm-pack's --chrome sets WASM_BINDGEN_TEST_ONLY_WEB but
+      # not the USE_* vars — without it the runner silently skips every test
+      # ("only configured to run in node.js") and the step would pass testing
+      # nothing. The env var (rather than wasm_bindgen_test_configure!
+      # (run_in_browser), which would flip the Node step to skip instead)
+      # lets the same source run in both engines.
+      - name: Install Chrome + chromedriver
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Run wasm-bindgen tests (headless Chrome)
+        env:
+          WASM_BINDGEN_USE_BROWSER: '1'
+        run: cd crates/fuzzgpu-wasm && wasm-pack test --headless --chrome
+
+      # The JS glue is the only place BigInt conversion happens — these checks
+      # prove exported i64s arrive as `bigint`, round-trip past 2^53, and
+      # reject non-BigInt arguments.
+      - name: Build Node module and run JS API tests
+        run: |
+          cd crates/fuzzgpu-wasm
+          wasm-pack build --target nodejs --out-dir target/wasm-api-check
+          node tests/js_api.test.cjs target/wasm-api-check/fuzzgpu_wasm.js
+
+  wasm-build:
+    name: wasm build script (release pkg)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      # Runs the exact script a user runs: release-profile (opt-level=s, lto)
+      # web build to pkg/. Catches silent regressions of the script itself or
+      # the release-profile wasm compile (the debug-profile wasm tests above
+      # would not catch either).
+      - name: Run build-wasm.sh
+        run: bash build-wasm.sh
+
+      - name: Verify generated pkg artifacts
+        run: |
+          test -s pkg/fuzzgpu_wasm.js
+          test -s pkg/fuzzgpu_wasm_bg.wasm
+          test -s pkg/fuzzgpu_wasm.d.ts
+          test -s pkg/package.json
+          # Wasm binary magic: \0asm
+          [ "$(head -c 4 pkg/fuzzgpu_wasm_bg.wasm | od -An -tx1 | tr -d ' ')" = "0061736d" ]
+          grep -q 'bigint' pkg/fuzzgpu_wasm.d.ts
+          node -e "const p = require('./pkg/package.json'); if (!p.name || !p.main || !p.types) process.exit(1); console.log('package.json ok:', p.name, p.main, p.types)"
+
+      # The web-target pkg is a bundler-style ES module, so functionally
+      # exercise the same release profile through the Node target with the
+      # existing JS API test suite.
+      - name: Functional check (release nodejs build + JS API tests)
+        run: |
+          cd crates/fuzzgpu-wasm
+          wasm-pack build --target nodejs --release --out-dir ../../pkg-release-check
+          node tests/js_api.test.cjs ../../pkg-release-check/fuzzgpu_wasm.js
+
+  wasm-python-differential:
+    # Cross-language differential: the same fixed corpus is computed through
+    # the JS wasm exports (differential_harness.js) and through the Python
+    # bindings (wasm_python_differential.py). Both wrap the same Rust core, so
+    # any mismatch is a binding bug — argument order, f64/u32 fidelity across
+    # the FFI boundary, tuple layout, index fidelity. The JS harness also
+    # hard-fails if an expected export is missing.
+    name: wasm ↔ Python differential
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build & install Python extension
+        run: pip install .
+
+      - name: Build wasm Node module
+        run: cd crates/fuzzgpu-wasm && wasm-pack build --target nodejs --out-dir ../../target/wasm-diff-check
+
+      - name: Run JS harness (compute corpus)
+        run: node crates/fuzzgpu-wasm/tests/differential_harness.js target/wasm-diff-check/fuzzgpu_wasm.js > target/wasm-diff-check/results.json
+
+      - name: Compare against Python bindings
+        run: python tests/wasm_python_differential.py target/wasm-diff-check/results.json

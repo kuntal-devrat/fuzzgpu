@@ -75,7 +75,7 @@ fn levenshtein_batch(py: Python, query: String, candidates: Vec<String>) -> PyRe
                             )));
                         }
                         if is_debug_mode() {
-                            eprintln!("fuzzgpu [fallback]: GPU kernel failed ({}), switching to Rayon CPU", e);
+                            log::warn!("fuzzgpu [fallback]: GPU kernel failed ({}), switching to Rayon CPU", e);
                         }
                     }
                 }
@@ -109,7 +109,7 @@ fn levenshtein_cdist(py: Python, list_a: Vec<String>, list_b: Vec<String>) -> Py
                             )));
                         }
                         if is_debug_mode() {
-                            eprintln!("fuzzgpu [fallback]: GPU matrix failed ({}), switching to Rayon CPU", e);
+                            log::warn!("fuzzgpu [fallback]: GPU matrix failed ({}), switching to Rayon CPU", e);
                         }
                     }
                 }
@@ -218,7 +218,7 @@ fn jaro_winkler_batch_fn(py: Python, query: String, candidates: Vec<String>, p: 
                             )));
                         }
                         if is_debug_mode() {
-                            eprintln!("fuzzgpu [fallback]: GPU kernel failed ({}), switching to Rayon CPU", e);
+                            log::warn!("fuzzgpu [fallback]: GPU kernel failed ({}), switching to Rayon CPU", e);
                         }
                     }
                 }
@@ -253,7 +253,7 @@ fn jaro_winkler_cdist(py: Python, list_a: Vec<String>, list_b: Vec<String>, p: f
                             )));
                         }
                         if is_debug_mode() {
-                            eprintln!("fuzzgpu [fallback]: GPU matrix failed ({}), switching to Rayon CPU", e);
+                            log::warn!("fuzzgpu [fallback]: GPU matrix failed ({}), switching to Rayon CPU", e);
                         }
                     }
                 }

@@ -1,6 +1,6 @@
 [package]
 name = "fuzzgpu-core"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "GPU-accelerated fuzzy string matching engine"
 license = "MIT"
@@ -19,3 +19,9 @@ bytemuck = { workspace = true, optional = true }
 thiserror = "2"
 log = "0.4"
 rayon = "1.10"
+
+[dev-dependencies]
+proptest = "1.11.0"
+# Integration tests construct wgpu objects (e.g. pipeline layouts) to drive the
+# public kernel-registration API; same version as the gpu feature's dep.
+wgpu = { workspace = true }

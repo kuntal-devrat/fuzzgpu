@@ -1,0 +1,16 @@
+[package]
+name = "wgpu-parallel-crash"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal reproducer for a wgpu crash under concurrent compute dispatch on Intel Iris Xe"
+license = "MIT"
+
+# Standalone workspace, like crates/fuzzgpu-wasm — not part of the fuzzgpu build.
+[workspace]
+
+[dependencies]
+# Matches the version used by fuzzgpu-core at the time the crash was found.
+# Bump to "30" (or "trunk") to test whether the crash is fixed upstream.
+wgpu = "24.0.5"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }

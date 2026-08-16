@@ -62,7 +62,6 @@ pub mod gpu_ext {
     use super::*;
     use bytemuck::{Pod, Zeroable};
     use std::sync::OnceLock;
-    use std::time::Duration;
     use wgpu::util::DeviceExt;
     use crate::gpu::{FuzzGpuError, GpuEngine, Result};
 
@@ -108,16 +107,11 @@ pub mod gpu_ext {
         }
 
         fn new_inner(engine: std::sync::Arc<GpuEngine>) -> Result<Self> {
-            let module = engine.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("levenshtein shader"),
-                source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
-            });
-
-            let matrix_module = engine.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("levenshtein matrix shader"),
-                source: wgpu::ShaderSource::Wgsl(MATRIX_SHADER_SRC.into()),
-            });
-
+            // Both kernels register through the public kernel-registration API
+            // (`GpuEngine::build_compute_pipeline`), so shader/pipeline
+            // validation failures surface as `FuzzGpuError::ShaderError` instead
+            // of panicking. Test builds can fault-inject invalid WGSL via
+            // `effective_shader_source`.
             let bind_group_layout = engine.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("levenshtein bgl"),
                 entries: &[
@@ -132,27 +126,22 @@ pub mod gpu_ext {
 
             let layout = engine.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
+                // wgpu 30 wraps bind group layouts in `Option` and replaces
+                // `push_constant_ranges` with `immediate_size` (0 = none).
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
             });
 
-            let pipeline = engine.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("levenshtein pipeline"),
-                layout: Some(&layout),
-                module: &module,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-
-            let matrix_pipeline = engine.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("levenshtein matrix pipeline"),
-                layout: Some(&layout),
-                module: &matrix_module,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+            let pipeline = engine.build_compute_pipeline(
+                "levenshtein pipeline",
+                &crate::gpu::effective_shader_source(SHADER_SRC),
+                &layout,
+            )?;
+            let matrix_pipeline = engine.build_compute_pipeline(
+                "levenshtein matrix pipeline",
+                &crate::gpu::effective_shader_source(MATRIX_SHADER_SRC),
+                &layout,
+            )?;
 
             Ok(Self { engine, pipeline, matrix_pipeline, bind_group_layout })
         }
@@ -254,9 +243,9 @@ pub mod gpu_ext {
             let chars_b_bytes = (chars_b.len() * 4) as u64;
             let results_size = (batch_size as u64) * 4;
 
-            if chars_a_bytes > self.engine.max_buffer_size
-                || chars_b_bytes > self.engine.max_buffer_size
-                || results_size > self.engine.max_buffer_size
+            if chars_a_bytes > self.engine.max_buffer_size_effective()
+                || chars_b_bytes > self.engine.max_buffer_size_effective()
+                || results_size > self.engine.max_buffer_size_effective()
             {
                 return Err(FuzzGpuError::BufferError(
                     "Buffer size exceeds device max_buffer_size".into(),
@@ -336,18 +325,20 @@ pub mod gpu_ext {
             }
 
             encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, results_size);
-            self.engine.queue.submit(Some(encoder.finish()));
+            self.engine.submit(encoder);
 
             let slice = buf_staging.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-            self.engine.device.poll(wgpu::Maintain::Wait);
+            self.engine.map_readback(&slice, move |r| { let _ = tx.send(r); });
+            self.engine.poll();
 
-            rx.recv_timeout(Duration::from_secs(10))
+            rx.recv_timeout(GpuEngine::readback_timeout())
                 .map_err(|_| FuzzGpuError::Timeout("GPU buffer mapping timed out after 10s".into()))?
                 .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
 
-            let data = slice.get_mapped_range();
+            let data = slice
+                .get_mapped_range()
+                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
             let gpu_results: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
             drop(data);
             buf_staging.unmap();
@@ -374,7 +365,7 @@ pub mod gpu_ext {
             let matrix_size = (total_pairs as u64) * 4;
 
             // If strings exceed GPU shader capacity (256 chars) or matrix exceeds GPU buffer limit, fall back to CPU immediately
-            if has_oversized || matrix_size > self.engine.max_buffer_size {
+            if has_oversized || matrix_size > self.engine.max_buffer_size_effective() {
                 return Ok(levenshtein_cdist_cpu(list_a, list_b));
             }
 
@@ -464,18 +455,20 @@ pub mod gpu_ext {
             }
 
             encoder.copy_buffer_to_buffer(&buf_matrix, 0, &buf_staging, 0, matrix_size);
-            self.engine.queue.submit(Some(encoder.finish()));
+            self.engine.submit(encoder);
 
             let slice = buf_staging.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-            self.engine.device.poll(wgpu::Maintain::Wait);
+            self.engine.map_readback(&slice, move |r| { let _ = tx.send(r); });
+            self.engine.poll();
 
-            rx.recv_timeout(Duration::from_secs(10))
+            rx.recv_timeout(GpuEngine::readback_timeout())
                 .map_err(|_| FuzzGpuError::Timeout("GPU matrix readback timed out after 10s".into()))?
                 .map_err(|e| FuzzGpuError::BufferError(format!("GPU matrix buffer map failed: {}", e)))?;
 
-            let data = slice.get_mapped_range();
+            let data = slice
+                .get_mapped_range()
+                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
             let flat: &[u32] = bytemuck::cast_slice(&data);
 
             let mut matrix: Vec<Vec<u32>> = Vec::with_capacity(rows);
@@ -488,6 +481,205 @@ pub mod gpu_ext {
             drop(data);
             buf_staging.unmap();
             Ok(matrix)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Deterministic pseudo-random ASCII strings (LCG), lengths 1..=16.
+        fn gen_strings(count: usize, seed: u64) -> Vec<String> {
+            let mut state = seed;
+            let mut out = Vec::with_capacity(count);
+            for _ in 0..count {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let len = 1 + ((state >> 33) as usize % 16);
+                let mut s = String::with_capacity(len);
+                for _ in 0..len {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
+                }
+                out.push(s);
+            }
+            out
+        }
+
+        fn gpu_kernel_or_skip() -> Option<&'static GpuLevenshteinKernel> {
+            match GpuLevenshteinKernel::get() {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    if crate::gpu::require_gpu() {
+                        panic!("FUZZGPU_REQUIRE_GPU is set but no usable GPU device: {}", e);
+                    }
+                    eprintln!("skipping GPU test (no usable device): {}", e);
+                    None
+                }
+            }
+        }
+
+        /// Exercises shader compilation, buffer sizing/allocation, dispatch,
+        /// readback, and the 0xFFFFFFFF sentinel path end-to-end against CPU results.
+        #[test]
+        fn test_gpu_compute_matches_cpu() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(1000, 0xDEADBEEF);
+            let b = gen_strings(1000, 0xCAFEBABE);
+            let mut pairs: Vec<(&str, &str)> =
+                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+            // Include edge cases that must be resolved on the CPU path.
+            pairs[0] = ("", "");
+            pairs[1] = ("", "xyz");
+            pairs[2] = ("hello", "hello");
+
+            let gpu = kernel.compute(&pairs).expect("GPU compute should succeed");
+            let cpu: Vec<u32> = pairs.iter()
+                .map(|(x, y)| levenshtein_distance_raw(x, y))
+                .collect();
+            assert_eq!(gpu, cpu, "GPU Levenshtein results must match CPU");
+            // The 0xFFFFFFFF sentinel must never leak into results.
+            assert!(!gpu.contains(&0xFFFFFFFF), "0xFFFFFFFF sentinel leaked into results");
+        }
+
+        /// Validates the 2D matrix pipeline (shader, O(N+M) packing, readback).
+        #[test]
+        fn test_gpu_compute_matrix_matches_cpu() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(30, 0x1234ABCD);
+            let b = gen_strings(30, 0x5678EF01);
+            let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
+
+            let gpu = kernel.compute_matrix(&refs_a, &refs_b).expect("GPU matrix should succeed");
+            let cpu = levenshtein_cdist_cpu(&refs_a, &refs_b);
+            assert_eq!(gpu, cpu, "GPU Levenshtein matrix must match CPU");
+            for row in &gpu {
+                assert!(!row.contains(&0xFFFFFFFF), "0xFFFFFFFF sentinel leaked into matrix");
+            }
+        }
+
+        /// Arms the readback-timeout fault and verifies the batch path returns
+        /// `FuzzGpuError::Timeout` deterministically (fast, and never Ok).
+        #[test]
+        fn test_batch_readback_timeout_returns_timeout_error() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(1000, 0xABCDEF01);
+            let b = gen_strings(1000, 0x23456789);
+            let pairs: Vec<(&str, &str)> =
+                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+
+            crate::gpu::arm_readback_timeout_fault();
+            let result = kernel.compute(&pairs);
+            crate::gpu::disarm_readback_timeout_fault();
+
+            match result {
+                Err(FuzzGpuError::Timeout(_)) => {} // expected
+                Err(e) => panic!("expected FuzzGpuError::Timeout, got: {}", e),
+                Ok(_) => panic!("expected FuzzGpuError::Timeout, got Ok results"),
+            }
+        }
+
+        /// Same fault-injection check for the 2D matrix readback path.
+        #[test]
+        fn test_matrix_readback_timeout_returns_timeout_error() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(30, 0x11111111);
+            let b = gen_strings(30, 0x22222222);
+            let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
+
+            crate::gpu::arm_readback_timeout_fault();
+            let result = kernel.compute_matrix(&refs_a, &refs_b);
+            crate::gpu::disarm_readback_timeout_fault();
+
+            match result {
+                Err(FuzzGpuError::Timeout(_)) => {} // expected
+                Err(e) => panic!("expected FuzzGpuError::Timeout, got: {}", e),
+                Ok(_) => panic!("expected FuzzGpuError::Timeout, got Ok results"),
+            }
+        }
+
+        /// Arms the small-buffer fault and verifies the batch path returns
+        /// `FuzzGpuError::BufferError` when inputs exceed the (faulted) limit.
+        #[test]
+        fn test_buffer_size_validation_returns_buffer_error() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(1000, 0x0BADF00D);
+            let b = gen_strings(1000, 0xF00DBABE);
+            let pairs: Vec<(&str, &str)> =
+                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+
+            crate::gpu::arm_small_buffer_fault();
+            let result = kernel.compute(&pairs);
+            crate::gpu::disarm_small_buffer_fault();
+
+            match result {
+                Err(FuzzGpuError::BufferError(_)) => {} // expected
+                Err(e) => panic!("expected FuzzGpuError::BufferError, got: {}", e),
+                Ok(_) => panic!("expected FuzzGpuError::BufferError, got Ok results"),
+            }
+        }
+
+        /// With the small-buffer fault armed, the matrix path must gracefully
+        /// fall back to CPU results instead of erroring.
+        #[test]
+        fn test_matrix_oversize_falls_back_to_cpu() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(32, 0x5EEDC0DE);
+            let b = gen_strings(32, 0x0DDBA11);
+            let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
+
+            crate::gpu::arm_small_buffer_fault();
+            let result = kernel.compute_matrix(&refs_a, &refs_b);
+            crate::gpu::disarm_small_buffer_fault();
+
+            let cpu = levenshtein_cdist_cpu(&refs_a, &refs_b);
+            match result {
+                Ok(matrix) => {
+                    assert_eq!(matrix, cpu, "matrix fallback must equal CPU results");
+                }
+                Err(e) => panic!("expected graceful CPU fallback, got error: {}", e),
+            }
+        }
+
+        /// Arms the shader-error fault and verifies `new_inner` returns
+        /// `FuzzGpuError::ShaderError` instead of panicking on invalid WGSL.
+        #[test]
+        fn test_shader_validation_error_returns_shader_error() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let engine = match GpuEngine::get() {
+                Ok(e) => e,
+                Err(e) => {
+                    if crate::gpu::require_gpu() {
+                        panic!("FUZZGPU_REQUIRE_GPU is set but no usable GPU device: {}", e);
+                    }
+                    eprintln!("skipping GPU test (no usable device): {}", e);
+                    return;
+                }
+            };
+
+            crate::gpu::arm_shader_error_fault();
+            let result = GpuLevenshteinKernel::new_inner(engine);
+            crate::gpu::disarm_shader_error_fault();
+
+            match result {
+                Err(FuzzGpuError::ShaderError(_)) => {} // expected
+                Err(e) => panic!("expected FuzzGpuError::ShaderError, got: {}", e),
+                Ok(_) => panic!("expected FuzzGpuError::ShaderError, got Ok kernel"),
+            }
         }
     }
 }

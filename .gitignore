@@ -3,6 +3,8 @@ target/
 **/target/
 Cargo.lock
 **/*.rs.bk
+# wasm-pack output from build-wasm.sh
+pkg/
 
 # Python
 __pycache__/
@@ -45,6 +47,9 @@ venv.bak/
 htmlcov/
 .tox/
 .nox/
+
+# Freebuff workspace state
+.freebuff/
 
 # IDE & OS
 .idea/

@@ -1,3 +1,5 @@
+use crate::{sat_add, sat_mul};
+
 /// True Myers 1999 bit-vector Levenshtein distance.
 ///
 /// For pattern length ≤ 64: O(n) time using ~15 bitwise operations per text character
@@ -8,6 +10,13 @@
 /// Reference: Gene Myers, "A Fast Bit-Vector Algorithm for Approximate String
 /// Matching Based on Dynamic Programming", JACM 1999.
 pub fn levenshtein_myers(a: &[u8], b: &[u8]) -> u32 {
+    // Documented contract: this is the ASCII fast path. `peq` is indexed by raw byte
+    // value (always in-bounds for u8), but byte-level matching of non-ASCII input
+    // would silently compute distances over UTF-8 continuation bytes instead of
+    // characters. Callers (Python/JS bindings) gate on `is_ascii()` first and fall
+    // back to the Unicode path. Assert it here so direct Rust callers can't
+    // silently get byte-semantics results.
+    assert!(a.is_ascii() && b.is_ascii(), "levenshtein_myers requires ASCII inputs");
     let (m, n) = (a.len(), b.len());
     if m == 0 { return n as u32; }
     if n == 0 { return m as u32; }
@@ -108,21 +117,21 @@ fn levenshtein_dp_optimized(a: &[u8], b: &[u8]) -> u32 {
 /// (Renamed from `needleman_wunsch_simd` — no actual SIMD intrinsics are used.)
 pub fn needleman_wunsch_striped(a: &[u8], b: &[u8], match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
     let (m, n) = (a.len(), b.len());
-    if m == 0 { return (n as i64).saturating_mul(gap_penalty); }
-    if n == 0 { return (m as i64).saturating_mul(gap_penalty); }
+    if m == 0 { return sat_mul(n as i64, gap_penalty); }
+    if n == 0 { return sat_mul(m as i64, gap_penalty); }
 
     // Fast path: identical strings.
-    if a == b { return (m as i64).saturating_mul(match_score); }
+    if a == b { return sat_mul(m as i64, match_score); }
 
     // Single-row + diagonal optimization.
     let mut row = vec![0i64; n + 1];
     for (j, item) in row.iter_mut().enumerate() {
-        *item = (j as i64).saturating_mul(gap_penalty);
+        *item = sat_mul(j as i64, gap_penalty);
     }
 
     for i in 1..=m {
         let mut prev_diag = row[0];
-        row[0] = (i as i64).saturating_mul(gap_penalty);
+        row[0] = sat_mul(i as i64, gap_penalty);
         let ai = a[i - 1];
 
         // Process in cache-friendly blocks of 8.
@@ -132,9 +141,9 @@ pub fn needleman_wunsch_striped(a: &[u8], b: &[u8], match_score: i64, mismatch_s
                 let jj = j + k;
                 let old = row[jj];
                 let cost = if ai == b[jj - 1] { match_score } else { mismatch_score };
-                row[jj] = (prev_diag.saturating_add(cost))
-                    .max(row[jj].saturating_add(gap_penalty))
-                    .max(row[jj - 1].saturating_add(gap_penalty));
+                row[jj] = sat_add(prev_diag, cost)
+                    .max(sat_add(row[jj], gap_penalty))
+                    .max(sat_add(row[jj - 1], gap_penalty));
                 prev_diag = old;
             }
             j += 8;
@@ -143,9 +152,9 @@ pub fn needleman_wunsch_striped(a: &[u8], b: &[u8], match_score: i64, mismatch_s
         while j <= n {
             let old = row[j];
             let cost = if ai == b[j - 1] { match_score } else { mismatch_score };
-            row[j] = (prev_diag.saturating_add(cost))
-                .max(row[j].saturating_add(gap_penalty))
-                .max(row[j - 1].saturating_add(gap_penalty));
+            row[j] = sat_add(prev_diag, cost)
+                .max(sat_add(row[j], gap_penalty))
+                .max(sat_add(row[j - 1], gap_penalty));
             prev_diag = old;
             j += 1;
         }
@@ -155,6 +164,9 @@ pub fn needleman_wunsch_striped(a: &[u8], b: &[u8], match_score: i64, mismatch_s
 
 /// Optimized Jaro similarity.
 /// (Renamed from `jaro_simd` — no actual SIMD intrinsics are used.)
+///
+/// Uses stack-allocated match flags for strings ≤ 128 bytes and a single shared
+/// inner implementation for both stack and heap paths (no code duplication).
 pub fn jaro_optimized(a: &[u8], b: &[u8]) -> f64 {
     let (m, n) = (a.len(), b.len());
     if m == 0 && n == 0 { return 1.0; }
@@ -163,55 +175,23 @@ pub fn jaro_optimized(a: &[u8], b: &[u8]) -> f64 {
 
     let match_distance = (m.max(n) / 2).saturating_sub(1);
 
-    // Use stack-allocated flags for short strings to avoid heap allocation.
-    let mut a_matches_buf = [false; 128];
-    let mut b_matches_buf = [false; 128];
-    let (a_matches, b_matches): (&mut [bool], &mut [bool]) = if m <= 128 && n <= 128 {
-        (&mut a_matches_buf[..m], &mut b_matches_buf[..n])
+    if m <= 128 && n <= 128 {
+        // Stack-allocated flags for short strings to avoid heap allocation.
+        let mut a_matches = [false; 128];
+        let mut b_matches = [false; 128];
+        jaro_inner_slice(a, b, &mut a_matches[..m], &mut b_matches[..n], match_distance)
     } else {
-        // This branch leaks into heap only for very long strings.
-        // We use Box to avoid the borrow checker issue with conditional vec allocation.
-        // For simplicity, just use vec for > 128.
-        // (In practice strings > 128 are rare for fuzzy matching.)
-        return jaro_optimized_heap(a, b, match_distance);
-    };
-
-    let mut matches = 0u32;
-
-    for i in 0..m {
-        let lo = i.saturating_sub(match_distance);
-        let hi = (i + match_distance + 1).min(n);
-        let ai = a[i];
-        for j in lo..hi {
-            if b_matches[j] || ai != b[j] { continue; }
-            a_matches[i] = true;
-            b_matches[j] = true;
-            matches += 1;
-            break;
-        }
+        // Heap path only for strings > 128 bytes (rare in fuzzy matching).
+        let mut a_matches = vec![false; m];
+        let mut b_matches = vec![false; n];
+        jaro_inner_slice(a, b, &mut a_matches, &mut b_matches, match_distance)
     }
-
-    if matches == 0 { return 0.0; }
-
-    let mut transpositions = 0u32;
-    let mut k = 0;
-    for i in 0..m {
-        if !a_matches[i] { continue; }
-        while !b_matches[k] { k += 1; }
-        if a[i] != b[k] { transpositions += 1; }
-        k += 1;
-    }
-
-    (matches as f64 / m as f64
-        + matches as f64 / n as f64
-        + (matches as f64 - transpositions as f64 / 2.0) / matches as f64) / 3.0
 }
 
-/// Heap-allocating path for strings > 128 bytes.
-fn jaro_optimized_heap(a: &[u8], b: &[u8], match_distance: usize) -> f64 {
+/// Single implementation shared by the stack and heap allocation paths.
+#[inline]
+fn jaro_inner_slice(a: &[u8], b: &[u8], a_matches: &mut [bool], b_matches: &mut [bool], match_distance: usize) -> f64 {
     let (m, n) = (a.len(), b.len());
-    let mut a_matches = vec![false; m];
-    let mut b_matches = vec![false; n];
     let mut matches = 0u32;
 
     for i in 0..m {
@@ -278,5 +258,41 @@ mod tests {
         let b: Vec<u8> = (0..100).map(|i| b'b' + (i % 26)).collect();
         // Should fall back to DP for > 64 chars. Just verify it doesn't panic.
         let _ = levenshtein_myers(&a, &b);
+    }
+
+    #[test]
+    #[should_panic(expected = "levenshtein_myers requires ASCII inputs")]
+    fn test_myers_rejects_non_ascii() {
+        let _ = levenshtein_myers("café".as_bytes(), b"cafe");
+    }
+
+    #[test]
+    fn test_jaro_optimized_matches_reference() {
+        use crate::jaro;
+        // Stack path (≤ 128 bytes).
+        for (a, b) in [("MARTHA", "MARHTA"), ("DIXON", "DICKSONX"), ("kitten", "sitting")] {
+            assert!((jaro_optimized(a.as_bytes(), b.as_bytes()) - jaro(a, b)).abs() < 1e-12, "{} vs {}", a, b);
+        }
+        // Heap path (> 128 bytes) — must agree with the reference too.
+        let long_a: Vec<u8> = (0..200).map(|i| b'a' + (i % 26)).collect();
+        let long_b: Vec<u8> = (0..200).map(|i| b'b' + (i % 26)).collect();
+        let oa = String::from_utf8(long_a).unwrap();
+        let ob = String::from_utf8(long_b).unwrap();
+        let simd = jaro_optimized(oa.as_bytes(), ob.as_bytes());
+        let reference = jaro(&oa, &ob);
+        assert!((simd - reference).abs() < 1e-12, "heap path mismatch: {} vs {}", simd, reference);
+    }
+
+    #[test]
+    fn test_needleman_wunsch_striped_matches_reference() {
+        use crate::needleman_wunsch;
+        let cases = [("AGCT", "AGCT"), ("kitten", "sitting"), ("ACGT", "AT"), ("hello", "world")];
+        for (a, b) in cases {
+            assert_eq!(
+                needleman_wunsch_striped(a.as_bytes(), b.as_bytes(), 2, -1, -1),
+                needleman_wunsch(a, b, 2, -1, -1),
+                "{} vs {}", a, b
+            );
+        }
     }
 }

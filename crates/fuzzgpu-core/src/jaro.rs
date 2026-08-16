@@ -156,7 +156,6 @@ pub mod gpu_ext {
     use super::*;
     use bytemuck::{Pod, Zeroable};
     use std::sync::OnceLock;
-    use std::time::Duration;
     use wgpu::util::DeviceExt;
     use crate::gpu::{FuzzGpuError, GpuEngine, Result};
 
@@ -204,16 +203,11 @@ pub mod gpu_ext {
         }
 
         fn new_inner(engine: std::sync::Arc<GpuEngine>) -> Result<Self> {
-            let module = engine.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("jaro shader"),
-                source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
-            });
-
-            let matrix_module = engine.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("jaro matrix shader"),
-                source: wgpu::ShaderSource::Wgsl(MATRIX_SHADER_SRC.into()),
-            });
-
+            // Both kernels register through the public kernel-registration API
+            // (`GpuEngine::build_compute_pipeline`), so shader/pipeline
+            // validation failures surface as `FuzzGpuError::ShaderError` instead
+            // of panicking. Test builds can fault-inject invalid WGSL via
+            // `effective_shader_source`.
             let bind_group_layout = engine.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("jaro bgl"),
                 entries: &[
@@ -228,33 +222,38 @@ pub mod gpu_ext {
 
             let layout = engine.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
+                // wgpu 30 wraps bind group layouts in `Option` and replaces
+                // `push_constant_ranges` with `immediate_size` (0 = none).
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
             });
 
-            let pipeline = engine.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("jaro pipeline"),
-                layout: Some(&layout),
-                module: &module,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-
-            let matrix_pipeline = engine.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("jaro matrix pipeline"),
-                layout: Some(&layout),
-                module: &matrix_module,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+            let pipeline = engine.build_compute_pipeline(
+                "jaro pipeline",
+                &crate::gpu::effective_shader_source(SHADER_SRC),
+                &layout,
+            )?;
+            let matrix_pipeline = engine.build_compute_pipeline(
+                "jaro matrix pipeline",
+                &crate::gpu::effective_shader_source(MATRIX_SHADER_SRC),
+                &layout,
+            )?;
 
             Ok(Self { engine, pipeline, matrix_pipeline, bind_group_layout })
         }
 
         /// Smart streaming GPU/CPU dispatch for batch Jaro-Winkler with dynamic chunk sizing.
+        ///
+        /// `p` (Winkler prefix weight) must be in `0.0..=0.25`; anything else —
+        /// including NaN — is rejected with `FuzzGpuError::InvalidInput` before
+        /// any dispatch. (The CPU `jaro_winkler` clamps instead; this is the
+        /// strict boundary of the Result-returning GPU API.)
         pub fn compute_batch(&self, pairs: &[(&str, &str)], p: f64) -> Result<Vec<f64>> {
+            if !(0.0..=0.25).contains(&p) {
+                return Err(FuzzGpuError::InvalidInput(format!(
+                    "Jaro-Winkler prefix weight p must be within 0.0..=0.25, got {p}"
+                )));
+            }
             let n = pairs.len();
             if n == 0 { return Ok(vec![]); }
 
@@ -348,9 +347,9 @@ pub mod gpu_ext {
             let chars_b_bytes = (chars_b.len() * 4) as u64;
             let results_size = (batch_size as u64) * 4;
 
-            if chars_a_bytes > self.engine.max_buffer_size
-                || chars_b_bytes > self.engine.max_buffer_size
-                || results_size > self.engine.max_buffer_size
+            if chars_a_bytes > self.engine.max_buffer_size_effective()
+                || chars_b_bytes > self.engine.max_buffer_size_effective()
+                || results_size > self.engine.max_buffer_size_effective()
             {
                 return Err(FuzzGpuError::BufferError(
                     "Buffer size exceeds device max_buffer_size".into(),
@@ -395,18 +394,20 @@ pub mod gpu_ext {
             }
 
             encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, results_size);
-            self.engine.queue.submit(Some(encoder.finish()));
+            self.engine.submit(encoder);
 
             let slice = buf_staging.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-            self.engine.device.poll(wgpu::Maintain::Wait);
+            self.engine.map_readback(&slice, move |r| { let _ = tx.send(r); });
+            self.engine.poll();
 
-            rx.recv_timeout(Duration::from_secs(10))
+            rx.recv_timeout(GpuEngine::readback_timeout())
                 .map_err(|_| FuzzGpuError::Timeout("GPU Jaro readback timed out after 10s".into()))?
                 .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
 
-            let data = slice.get_mapped_range();
+            let data = slice
+                .get_mapped_range()
+                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
             let raw: &[u32] = bytemuck::cast_slice(&data);
             let gpu_results: Vec<f64> = raw.iter().map(|&bits| f32::from_bits(bits) as f64).collect();
             drop(data);
@@ -416,7 +417,16 @@ pub mod gpu_ext {
 
         /// Dedicated 2D Jaro-Winkler Matrix GPU compute: O(N + M) upload instead of O(N * M).
         /// Pre-filters oversized strings and validates buffer limits before dispatch.
+        ///
+        /// `p` (Winkler prefix weight) must be in `0.0..=0.25`; anything else —
+        /// including NaN — is rejected with `FuzzGpuError::InvalidInput` before
+        /// any dispatch.
         pub fn compute_matrix(&self, list_a: &[&str], list_b: &[&str], p: f64) -> Result<Vec<Vec<f64>>> {
+            if !(0.0..=0.25).contains(&p) {
+                return Err(FuzzGpuError::InvalidInput(format!(
+                    "Jaro-Winkler prefix weight p must be within 0.0..=0.25, got {p}"
+                )));
+            }
             let rows = list_a.len();
             let cols = list_b.len();
             if rows == 0 || cols == 0 { return Ok(vec![]); }
@@ -432,7 +442,7 @@ pub mod gpu_ext {
 
             let matrix_size = (total_pairs as u64) * 4;
 
-            if has_oversized || matrix_size > self.engine.max_buffer_size {
+            if has_oversized || matrix_size > self.engine.max_buffer_size_effective() {
                 return Ok(jaro_winkler_cdist_cpu(list_a, list_b, p));
             }
 
@@ -516,18 +526,20 @@ pub mod gpu_ext {
             }
 
             encoder.copy_buffer_to_buffer(&buf_matrix, 0, &buf_staging, 0, matrix_size);
-            self.engine.queue.submit(Some(encoder.finish()));
+            self.engine.submit(encoder);
 
             let slice = buf_staging.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-            self.engine.device.poll(wgpu::Maintain::Wait);
+            self.engine.map_readback(&slice, move |r| { let _ = tx.send(r); });
+            self.engine.poll();
 
-            rx.recv_timeout(Duration::from_secs(10))
+            rx.recv_timeout(GpuEngine::readback_timeout())
                 .map_err(|_| FuzzGpuError::Timeout("GPU Jaro matrix readback timed out after 10s".into()))?
                 .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
 
-            let data = slice.get_mapped_range();
+            let data = slice
+                .get_mapped_range()
+                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
             let raw: &[u32] = bytemuck::cast_slice(&data);
 
             let mut matrix: Vec<Vec<f64>> = Vec::with_capacity(rows);
@@ -540,6 +552,282 @@ pub mod gpu_ext {
             drop(data);
             buf_staging.unmap();
             Ok(matrix)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Deterministic pseudo-random ASCII strings (LCG), lengths 1..=16.
+        fn gen_strings(count: usize, seed: u64) -> Vec<String> {
+            let mut state = seed;
+            let mut out = Vec::with_capacity(count);
+            for _ in 0..count {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let len = 1 + ((state >> 33) as usize % 16);
+                let mut s = String::with_capacity(len);
+                for _ in 0..len {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
+                }
+                out.push(s);
+            }
+            out
+        }
+
+        fn gpu_kernel_or_skip() -> Option<&'static GpuJaroKernel> {
+            match GpuJaroKernel::get() {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    if crate::gpu::require_gpu() {
+                        panic!("FUZZGPU_REQUIRE_GPU is set but no usable GPU device: {}", e);
+                    }
+                    eprintln!("skipping GPU test (no usable device): {}", e);
+                    None
+                }
+            }
+        }
+
+        fn assert_close(gpu: &[f64], cpu: &[f64]) {
+            assert_eq!(gpu.len(), cpu.len());
+            for (i, (g, c)) in gpu.iter().zip(cpu.iter()).enumerate() {
+                assert!(
+                    (g - c).abs() < 1e-4,
+                    "GPU Jaro result {} differs from CPU: {} vs {}",
+                    i, g, c
+                );
+            }
+        }
+
+        /// Exercises shader compilation, buffer sizing/allocation, dispatch,
+        /// readback, and the negative sentinel fallback end-to-end against CPU.
+        #[test]
+        fn test_gpu_batch_matches_cpu() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(1000, 0xFEEDFACE);
+            let b = gen_strings(1000, 0x0DDBA11);
+            let mut pairs: Vec<(&str, &str)> =
+                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+            pairs[0] = ("", "");
+            pairs[1] = ("", "xyz");
+            pairs[2] = ("hello", "hello");
+
+            let gpu = kernel.compute_batch(&pairs, 0.1).expect("GPU batch should succeed");
+            let cpu: Vec<f64> = pairs.iter()
+                .map(|(x, y)| crate::jaro_winkler(x, y, 0.1))
+                .collect();
+            assert_close(&gpu, &cpu);
+            // The negative sentinel (written for > 128-char strings) must never leak.
+            assert!(gpu.iter().all(|&v| v >= 0.0), "negative sentinel leaked into results");
+        }
+
+        /// Validates the 2D Jaro-Winkler matrix pipeline.
+        #[test]
+        fn test_gpu_matrix_matches_cpu() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(30, 0x13579BDF);
+            let b = gen_strings(30, 0x2468ACE0);
+            let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
+
+            let gpu = kernel.compute_matrix(&refs_a, &refs_b, 0.1).expect("GPU matrix should succeed");
+            let cpu = jaro_winkler_cdist_cpu(&refs_a, &refs_b, 0.1);
+            for (grow, crow) in gpu.iter().zip(cpu.iter()) {
+                assert_close(grow, crow);
+            }
+        }
+
+        /// Arms the readback-timeout fault and verifies the batch path returns
+        /// `FuzzGpuError::Timeout` deterministically (fast, and never Ok).
+        #[test]
+        fn test_batch_readback_timeout_returns_timeout_error() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(1000, 0xFEED1234);
+            let b = gen_strings(1000, 0x0DD5A11);
+            let pairs: Vec<(&str, &str)> =
+                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+
+            crate::gpu::arm_readback_timeout_fault();
+            let result = kernel.compute_batch(&pairs, 0.1);
+            crate::gpu::disarm_readback_timeout_fault();
+
+            match result {
+                Err(FuzzGpuError::Timeout(_)) => {} // expected
+                Err(e) => panic!("expected FuzzGpuError::Timeout, got: {}", e),
+                Ok(_) => panic!("expected FuzzGpuError::Timeout, got Ok results"),
+            }
+        }
+
+        /// Same fault-injection check for the 2D matrix readback path.
+        #[test]
+        fn test_matrix_readback_timeout_returns_timeout_error() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(30, 0x33333333);
+            let b = gen_strings(30, 0x44444444);
+            let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
+
+            crate::gpu::arm_readback_timeout_fault();
+            let result = kernel.compute_matrix(&refs_a, &refs_b, 0.1);
+            crate::gpu::disarm_readback_timeout_fault();
+
+            match result {
+                Err(FuzzGpuError::Timeout(_)) => {} // expected
+                Err(e) => panic!("expected FuzzGpuError::Timeout, got: {}", e),
+                Ok(_) => panic!("expected FuzzGpuError::Timeout, got Ok results"),
+            }
+        }
+
+        /// Arms the small-buffer fault and verifies the batch path returns
+        /// `FuzzGpuError::BufferError` when inputs exceed the (faulted) limit.
+        #[test]
+        fn test_buffer_size_validation_returns_buffer_error() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(1000, 0xC0FFEE01);
+            let b = gen_strings(1000, 0x0FF1CE11);
+            let pairs: Vec<(&str, &str)> =
+                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+
+            crate::gpu::arm_small_buffer_fault();
+            let result = kernel.compute_batch(&pairs, 0.1);
+            crate::gpu::disarm_small_buffer_fault();
+
+            match result {
+                Err(FuzzGpuError::BufferError(_)) => {} // expected
+                Err(e) => panic!("expected FuzzGpuError::BufferError, got: {}", e),
+                Ok(_) => panic!("expected FuzzGpuError::BufferError, got Ok results"),
+            }
+        }
+
+        /// With the small-buffer fault armed, the matrix path must gracefully
+        /// fall back to CPU results instead of erroring.
+        #[test]
+        fn test_matrix_oversize_falls_back_to_cpu() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let a = gen_strings(32, 0xA11CEB00);
+            let b = gen_strings(32, 0xB00B1355);
+            let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
+
+            crate::gpu::arm_small_buffer_fault();
+            let result = kernel.compute_matrix(&refs_a, &refs_b, 0.1);
+            crate::gpu::disarm_small_buffer_fault();
+
+            let cpu = jaro_winkler_cdist_cpu(&refs_a, &refs_b, 0.1);
+            match result {
+                Ok(matrix) => {
+                    assert_eq!(matrix, cpu, "matrix fallback must equal CPU results");
+                }
+                Err(e) => panic!("expected graceful CPU fallback, got error: {}", e),
+            }
+        }
+
+        /// Arms the shader-error fault and verifies `new_inner` returns
+        /// `FuzzGpuError::ShaderError` instead of panicking on invalid WGSL.
+        #[test]
+        fn test_shader_validation_error_returns_shader_error() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let engine = match GpuEngine::get() {
+                Ok(e) => e,
+                Err(e) => {
+                    if crate::gpu::require_gpu() {
+                        panic!("FUZZGPU_REQUIRE_GPU is set but no usable GPU device: {}", e);
+                    }
+                    eprintln!("skipping GPU test (no usable device): {}", e);
+                    return;
+                }
+            };
+
+            crate::gpu::arm_shader_error_fault();
+            let result = GpuJaroKernel::new_inner(engine);
+            crate::gpu::disarm_shader_error_fault();
+
+            match result {
+                Err(FuzzGpuError::ShaderError(_)) => {} // expected
+                Err(e) => panic!("expected FuzzGpuError::ShaderError, got: {}", e),
+                Ok(_) => panic!("expected FuzzGpuError::ShaderError, got Ok kernel"),
+            }
+        }
+
+        /// Malformed `p` values (outside the Winkler 0.0–0.25 range, or NaN)
+        /// must be rejected with `FuzzGpuError::InvalidInput` before any GPU
+        /// work; the valid boundary values must still pass through.
+        #[test]
+        fn test_jaro_batch_invalid_p_returns_invalid_input() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let pairs: Vec<(&str, &str)> = vec![("MARTHA", "MARHTA"), ("hello", "world")];
+            for bad in [0.26f64, -0.1, 0.5, f64::NAN] {
+                match kernel.compute_batch(&pairs, bad) {
+                    Err(FuzzGpuError::InvalidInput(_)) => {} // expected
+                    other => panic!("expected FuzzGpuError::InvalidInput for p={bad}, got: {other:?}"),
+                }
+            }
+            for good in [0.0f64, 0.1, 0.25] {
+                assert!(kernel.compute_batch(&pairs, good).is_ok(), "p={good} should be accepted");
+            }
+        }
+
+        /// Same InvalidInput rejection on the 2D matrix entry point.
+        #[test]
+        fn test_jaro_matrix_invalid_p_returns_invalid_input() {
+            let _gpu_guard = crate::gpu::gpu_test_lock();
+            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+
+            let list_a = ["MARTHA", "hello"];
+            let list_b = ["MARHTA", "world"];
+            for bad in [0.26f64, -0.1, 0.5, f64::NAN] {
+                match kernel.compute_matrix(&list_a, &list_b, bad) {
+                    Err(FuzzGpuError::InvalidInput(_)) => {} // expected
+                    other => panic!("expected FuzzGpuError::InvalidInput for p={bad}, got: {other:?}"),
+                }
+            }
+            for good in [0.0f64, 0.1, 0.25] {
+                assert!(kernel.compute_matrix(&list_a, &list_b, good).is_ok(), "p={good} should be accepted");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// The byte fast path and the char path must agree exactly on ASCII
+        /// input. Lengths up to 200 bytes cross the 128-byte stack/heap split
+        /// in both implementations.
+        #[test]
+        fn ascii_byte_and_char_paths_agree(
+            a in prop::collection::vec(prop::char::range('a', 'z'), 0..=200usize),
+            b in prop::collection::vec(prop::char::range('a', 'z'), 0..=200usize),
+        ) {
+            let a: String = a.into_iter().collect();
+            let b: String = b.into_iter().collect();
+            let a_chars: Vec<char> = a.chars().collect();
+            let b_chars: Vec<char> = b.chars().collect();
+            let by = jaro_bytes(a.as_bytes(), b.as_bytes());
+            let ch = jaro_chars(&a_chars, &b_chars);
+            prop_assert!(
+                (by - ch).abs() < 1e-12,
+                "jaro_bytes {} != jaro_chars {} for {:?} vs {:?}",
+                by, ch, a, b
+            );
         }
     }
 }

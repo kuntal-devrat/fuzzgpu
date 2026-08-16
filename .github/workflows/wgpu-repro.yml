@@ -1,0 +1,127 @@
+name: wgpu repro (lavapipe)
+
+# Diagnostic workflow for the wgpu parallel-dispatch crash (heap corruption /
+# segfault under >=3 concurrent dispatchers on a shared device — Intel Iris Xe,
+# gfx-rs/wgpu#10085). Runs the minimal reproducer on a SOFTWARE Vulkan adapter
+# (Mesa lavapipe), which needs no GPU hardware, and uploads the evidence
+# (full log, outcome, environment, reproducer source) so it can be attached to
+# the upstream issue.
+#
+# Manual trigger (workflow_dispatch). A red job = crash reproduced; green =
+# no crash in the requested number of runs. Both outcomes are useful evidence.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Reproducer to run: "minimal" = repro/wgpu-parallel-crash, "lockless-suite" = fuzzgpu GPU tests with the dispatch-serialization workaround bypassed'
+        type: choice
+        options: [minimal, lockless-suite]
+        default: minimal
+      runs:
+        description: 'Number of process runs in the loop'
+        type: number
+        default: 150
+      threads:
+        description: 'Concurrent GPU-dispatch threads (the Intel crash needs >= 3)'
+        type: number
+        default: 8
+      iters:
+        description: 'Iterations per child process (minimal mode only)'
+        type: number
+        default: 200
+
+jobs:
+  repro:
+    name: ${{ inputs.mode }} repro — ${{ inputs.runs }} runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install software Vulkan adapter (Mesa lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+
+      - name: Verify lavapipe is visible
+        run: |
+          vulkaninfo --summary | grep -iE 'lava|llvmpipe' || { echo "lavapipe not found"; exit 1; }
+
+      - name: Run repro loop
+        id: repro
+        env:
+          WGPU_BACKEND: vulkan
+          MODE: ${{ inputs.mode }}
+          RUNS: ${{ inputs.runs }}
+          THREADS: ${{ inputs.threads }}
+          ITERS: ${{ inputs.iters }}
+        run: |
+          set +e
+          cd "$GITHUB_WORKSPACE"
+          if [ "$MODE" = "lockless-suite" ]; then
+            # The fuzzgpu GPU test suite with its dispatch-serialization
+            # workaround bypassed — this is what reproduces on Intel hardware.
+            cargo test -p fuzzgpu-core --lib --no-run > /dev/null 2>&1 || { echo "suite build failed" > outcome.txt; exit 1; }
+            BIN=$(ls -t target/debug/deps/fuzzgpu_core-* 2>/dev/null | grep -v '\.d$' | head -1)
+            [ -n "$BIN" ] || { echo "no test binary found" > outcome.txt; exit 1; }
+            for i in $(seq 1 "$RUNS"); do
+              FUZZGPU_SKIP_DISPATCH_LOCK=1 FUZZGPU_REQUIRE_GPU=1 "$BIN" gpu --test-threads="$THREADS" > run.log 2>&1
+              code=$?
+              if [ $code -ne 0 ]; then
+                echo "REPRODUCED: crash at run $i/$RUNS (exit $code) — see run.log"
+                echo "REPRODUCED: crash at run $i/$RUNS (exit $code)" > outcome.txt
+                exit 1
+              fi
+            done
+            echo "NO CRASH in $RUNS runs" | tee outcome.txt
+          else
+            # Minimal reproducer: N threads share one device, each dispatching
+            # the real Levenshtein kernel with buffer churn + poll/map readback.
+            cd repro/wgpu-parallel-crash
+            cargo build --release > /dev/null 2>&1 || { echo "repro build failed" > outcome.txt; exit 1; }
+            ./target/release/wgpu-parallel-crash --process-loop "$RUNS" --threads "$THREADS" --iters "$ITERS" > "$GITHUB_WORKSPACE/run.log" 2>&1
+            code=$?
+            if grep -q 'CRASH' "$GITHUB_WORKSPACE/run.log"; then
+              echo "REPRODUCED: crash detected (exit $code) — see run.log"
+              echo "REPRODUCED: crash detected (exit $code)" > "$GITHUB_WORKSPACE/outcome.txt"
+              exit 1
+            elif [ $code -ne 0 ]; then
+              echo "repro exited $code without a CRASH marker — see run.log"
+              echo "UNKNOWN: exit $code, no CRASH marker" > "$GITHUB_WORKSPACE/outcome.txt"
+              exit 1
+            fi
+            echo "NO CRASH in $RUNS runs" | tee "$GITHUB_WORKSPACE/outcome.txt"
+          fi
+
+      - name: Package reproducer source
+        if: always()
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          tar -czf repro-source.tar.gz -C repro/wgpu-parallel-crash --exclude=target .
+
+      - name: Collect environment info
+        if: always()
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          {
+            echo "os: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2)"
+            echo "rustc: $(rustc --version)"
+            echo "wgpu (Cargo.toml): $(grep -m1 '^wgpu' Cargo.toml)"
+            echo "--- vulkaninfo ---"
+            vulkaninfo --summary
+          } > env.txt
+
+      - name: Upload repro evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wgpu-crash-evidence
+          path: |
+            env.txt
+            outcome.txt
+            run.log
+            repro-source.tar.gz
+          if-no-files-found: warn

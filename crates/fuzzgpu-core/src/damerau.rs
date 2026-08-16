@@ -16,7 +16,11 @@ pub fn damerau_levenshtein_distance(a: &str, b: &str) -> u32 {
 }
 
 fn damerau_bytes(a: &[u8], b: &[u8]) -> u32 {
-    debug_assert!(a.is_ascii() && b.is_ascii(), "damerau_bytes requires ASCII inputs");
+    // Safety invariant, not a debug-only check: this function indexes `da` by raw byte
+    // value, so non-ASCII bytes would silently produce wrong distances (byte-level
+    // collisions between UTF-8 continuation bytes and ASCII). `assert!` survives
+    // release builds, which is what PyPI wheels ship.
+    assert!(a.is_ascii() && b.is_ascii(), "damerau_bytes requires ASCII inputs");
     let (m, n) = (a.len(), b.len());
     if m == 0 { return n as u32; }
     if n == 0 { return m as u32; }
@@ -167,6 +171,30 @@ pub fn damerau_ratio(s1: &str, s2: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// The ASCII byte-array path and the Unicode char path are two
+        /// independent implementations of Lowrance-Wagner; they must agree
+        /// exactly on ASCII input.
+        #[test]
+        fn ascii_byte_and_char_paths_agree(
+            a in prop::collection::vec(prop::char::range('a', 'z'), 0..=60usize),
+            b in prop::collection::vec(prop::char::range('a', 'z'), 0..=60usize),
+        ) {
+            let a: String = a.into_iter().collect();
+            let b: String = b.into_iter().collect();
+            let a_chars: Vec<char> = a.chars().collect();
+            let b_chars: Vec<char> = b.chars().collect();
+            prop_assert_eq!(
+                damerau_bytes(a.as_bytes(), b.as_bytes()),
+                damerau_chars(&a_chars, &b_chars),
+                "byte path {} != char path for {:?} vs {:?}",
+                damerau_bytes(a.as_bytes(), b.as_bytes()),
+                a, b
+            );
+        }
+    }
 
     #[test]
     fn test_damerau_transposition() {
@@ -189,5 +217,13 @@ mod tests {
         assert_eq!(damerau_levenshtein_distance("hello", "hello"), 0);
         assert_eq!(damerau_levenshtein_distance("hello", ""), 5);
         assert_eq!(damerau_levenshtein_distance("", "world"), 5);
+    }
+
+    // The ASCII gate is a safety invariant (`assert!`, not `debug_assert!`):
+    // it must fire even in release builds.
+    #[test]
+    #[should_panic(expected = "damerau_bytes requires ASCII inputs")]
+    fn test_damerau_bytes_rejects_non_ascii() {
+        let _ = damerau_bytes("café".as_bytes(), b"cafe");
     }
 }
