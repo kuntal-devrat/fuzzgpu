@@ -4,7 +4,8 @@ use rayon::prelude::*;
 ///
 /// Uses single-row DP + scalar diagonal for minimal memory.
 /// Supports both ASCII fast-path and full Unicode characters.
-pub fn needleman_wunsch(a: &str, b: &str, match_score: i32, mismatch_score: i32, gap_penalty: i32) -> i32 {
+/// All scores use `i64` with saturating arithmetic to prevent integer overflow on long sequences.
+pub fn needleman_wunsch(a: &str, b: &str, match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
     if a.is_ascii() && b.is_ascii() {
         needleman_wunsch_bytes(a.as_bytes(), b.as_bytes(), match_score, mismatch_score, gap_penalty)
     } else {
@@ -14,29 +15,29 @@ pub fn needleman_wunsch(a: &str, b: &str, match_score: i32, mismatch_score: i32,
     }
 }
 
-fn needleman_wunsch_bytes(a: &[u8], b: &[u8], match_score: i32, mismatch_score: i32, gap_penalty: i32) -> i32 {
+fn needleman_wunsch_bytes(a: &[u8], b: &[u8], match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
     needleman_wunsch_slice(a, b, match_score, mismatch_score, gap_penalty)
 }
 
-fn needleman_wunsch_chars(a: &[char], b: &[char], match_score: i32, mismatch_score: i32, gap_penalty: i32) -> i32 {
+fn needleman_wunsch_chars(a: &[char], b: &[char], match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
     needleman_wunsch_slice(a, b, match_score, mismatch_score, gap_penalty)
 }
 
-fn needleman_wunsch_slice<T: PartialEq>(a: &[T], b: &[T], match_score: i32, mismatch_score: i32, gap_penalty: i32) -> i32 {
+fn needleman_wunsch_slice<T: PartialEq>(a: &[T], b: &[T], match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
     let (m, n) = (a.len(), b.len());
 
-    if m == 0 { return (n as i32).saturating_mul(gap_penalty); }
-    if n == 0 { return (m as i32).saturating_mul(gap_penalty); }
-    if a == b { return (m as i32).saturating_mul(match_score); }
+    if m == 0 { return (n as i64).saturating_mul(gap_penalty); }
+    if n == 0 { return (m as i64).saturating_mul(gap_penalty); }
+    if a == b { return (m as i64).saturating_mul(match_score); }
 
-    let mut row = vec![0i32; n + 1];
+    let mut row = vec![0i64; n + 1];
     for (j, item) in row.iter_mut().enumerate() {
-        *item = (j as i32).saturating_mul(gap_penalty);
+        *item = (j as i64).saturating_mul(gap_penalty);
     }
 
     for i in 1..=m {
         let mut prev_diag = row[0];
-        row[0] = (i as i32).saturating_mul(gap_penalty);
+        row[0] = (i as i64).saturating_mul(gap_penalty);
         let ai = &a[i - 1];
         for j in 1..=n {
             let old = row[j];
@@ -53,14 +54,14 @@ fn needleman_wunsch_slice<T: PartialEq>(a: &[T], b: &[T], match_score: i32, mism
 /// Batch Needleman-Wunsch with linear gap penalty.
 pub fn needleman_wunsch_batch(
     query: &str, candidates: &[&str],
-    match_score: i32, mismatch_score: i32, gap_penalty: i32,
-) -> Vec<i32> {
+    match_score: i64, mismatch_score: i64, gap_penalty: i64,
+) -> Vec<i64> {
     candidates.par_iter().map(|c| {
         needleman_wunsch(query, c, match_score, mismatch_score, gap_penalty)
     }).collect()
 }
 
-const NEG_INF: i32 = -1_000_000_000;
+const NEG_INF: i64 = -1_000_000_000_000_000_000;
 
 /// Needleman-Wunsch global alignment score with affine gap penalties (Gotoh 1982 algorithm).
 ///
@@ -68,11 +69,11 @@ const NEG_INF: i32 = -1_000_000_000;
 pub fn needleman_wunsch_affine(
     a: &str,
     b: &str,
-    match_score: i32,
-    mismatch_score: i32,
-    gap_open: i32,
-    gap_extend: i32,
-) -> i32 {
+    match_score: i64,
+    mismatch_score: i64,
+    gap_open: i64,
+    gap_extend: i64,
+) -> i64 {
     if a.is_ascii() && b.is_ascii() {
         needleman_wunsch_affine_slice(a.as_bytes(), b.as_bytes(), match_score, mismatch_score, gap_open, gap_extend)
     } else {
@@ -85,17 +86,17 @@ pub fn needleman_wunsch_affine(
 fn needleman_wunsch_affine_slice<T: PartialEq>(
     a: &[T],
     b: &[T],
-    match_score: i32,
-    mismatch_score: i32,
-    gap_open: i32,
-    gap_extend: i32,
-) -> i32 {
+    match_score: i64,
+    mismatch_score: i64,
+    gap_open: i64,
+    gap_extend: i64,
+) -> i64 {
     let (m, n) = (a.len(), b.len());
 
     if m == 0 && n == 0 { return 0; }
-    if m == 0 { return gap_open + (n as i32) * gap_extend; }
-    if n == 0 { return gap_open + (m as i32) * gap_extend; }
-    if a == b { return (m as i32) * match_score; }
+    if m == 0 { return gap_open.saturating_add((n as i64).saturating_mul(gap_extend)); }
+    if n == 0 { return gap_open.saturating_add((m as i64).saturating_mul(gap_extend)); }
+    if a == b { return (m as i64).saturating_mul(match_score); }
 
     let mut m_row = vec![NEG_INF; n + 1];
     let mut ix_row = vec![NEG_INF; n + 1];
@@ -103,7 +104,7 @@ fn needleman_wunsch_affine_slice<T: PartialEq>(
 
     m_row[0] = 0;
     for j in 1..=n {
-        let gap_cost = gap_open + (j as i32) * gap_extend;
+        let gap_cost = gap_open.saturating_add((j as i64).saturating_mul(gap_extend));
         iy_row[j] = gap_cost;
         m_row[j] = gap_cost;
     }
@@ -113,7 +114,7 @@ fn needleman_wunsch_affine_slice<T: PartialEq>(
         let mut prev_ix_diag = ix_row[0];
         let mut prev_iy_diag = iy_row[0];
 
-        let gap_cost_i = gap_open + (i as i32) * gap_extend;
+        let gap_cost_i = gap_open.saturating_add((i as i64).saturating_mul(gap_extend));
         ix_row[0] = gap_cost_i;
         m_row[0] = gap_cost_i;
         iy_row[0] = NEG_INF;
@@ -125,10 +126,14 @@ fn needleman_wunsch_affine_slice<T: PartialEq>(
             let sub_score = if ai == bj { match_score } else { mismatch_score };
 
             let prev_diag_best = prev_m_diag.max(prev_ix_diag).max(prev_iy_diag);
-            let new_m = prev_diag_best + sub_score;
+            let new_m = prev_diag_best.saturating_add(sub_score);
 
-            let new_ix = (ix_row[j] + gap_extend).max(m_row[j] + gap_open + gap_extend).max(iy_row[j] + gap_open + gap_extend);
-            let new_iy = (iy_row[j - 1] + gap_extend).max(m_row[j - 1] + gap_open + gap_extend).max(ix_row[j - 1] + gap_open + gap_extend);
+            let new_ix = (ix_row[j].saturating_add(gap_extend))
+                .max(m_row[j].saturating_add(gap_open).saturating_add(gap_extend))
+                .max(iy_row[j].saturating_add(gap_open).saturating_add(gap_extend));
+            let new_iy = (iy_row[j - 1].saturating_add(gap_extend))
+                .max(m_row[j - 1].saturating_add(gap_open).saturating_add(gap_extend))
+                .max(ix_row[j - 1].saturating_add(gap_open).saturating_add(gap_extend));
 
             prev_m_diag = m_row[j];
             prev_ix_diag = ix_row[j];
@@ -147,11 +152,11 @@ fn needleman_wunsch_affine_slice<T: PartialEq>(
 pub fn needleman_wunsch_affine_batch(
     query: &str,
     candidates: &[&str],
-    match_score: i32,
-    mismatch_score: i32,
-    gap_open: i32,
-    gap_extend: i32,
-) -> Vec<i32> {
+    match_score: i64,
+    mismatch_score: i64,
+    gap_open: i64,
+    gap_extend: i64,
+) -> Vec<i64> {
     candidates.par_iter().map(|c| {
         needleman_wunsch_affine(query, c, match_score, mismatch_score, gap_open, gap_extend)
     }).collect()

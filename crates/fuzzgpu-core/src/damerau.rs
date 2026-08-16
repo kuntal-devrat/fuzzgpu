@@ -16,6 +16,7 @@ pub fn damerau_levenshtein_distance(a: &str, b: &str) -> u32 {
 }
 
 fn damerau_bytes(a: &[u8], b: &[u8]) -> u32 {
+    debug_assert!(a.is_ascii() && b.is_ascii(), "damerau_bytes requires ASCII inputs");
     let (m, n) = (a.len(), b.len());
     if m == 0 { return n as u32; }
     if n == 0 { return m as u32; }

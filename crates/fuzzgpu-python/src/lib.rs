@@ -1,17 +1,34 @@
 use pyo3::prelude::*;
+use std::sync::OnceLock;
 
 #[cfg(feature = "gpu")]
 use fuzzgpu_core::gpu::GpuEngine;
 
-// ── Helpers ──────────────────────────────────────────────────
+// ── Cached Environment Configuration ─────────────────────────
+
+static FORCE_GPU_CACHE: OnceLock<bool> = OnceLock::new();
+static DEBUG_CACHE: OnceLock<bool> = OnceLock::new();
 
 #[inline]
 fn is_force_gpu() -> bool {
-    if let Ok(v) = std::env::var("FUZZGPU_FORCE_GPU") {
-        v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
-    } else {
-        false
-    }
+    *FORCE_GPU_CACHE.get_or_init(|| {
+        if let Ok(v) = std::env::var("FUZZGPU_FORCE_GPU") {
+            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
+        } else {
+            false
+        }
+    })
+}
+
+#[inline]
+fn is_debug_mode() -> bool {
+    *DEBUG_CACHE.get_or_init(|| {
+        if let Ok(v) = std::env::var("FUZZGPU_DEBUG") {
+            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
+        } else {
+            false
+        }
+    })
 }
 
 // ── Levenshtein ──────────────────────────────────────────────
@@ -57,7 +74,7 @@ fn levenshtein_batch(py: Python, query: String, candidates: Vec<String>) -> PyRe
                                 e
                             )));
                         }
-                        if std::env::var("FUZZGPU_DEBUG").is_ok() {
+                        if is_debug_mode() {
                             eprintln!("fuzzgpu [fallback]: GPU kernel failed ({}), switching to Rayon CPU", e);
                         }
                     }
@@ -91,7 +108,7 @@ fn levenshtein_cdist(py: Python, list_a: Vec<String>, list_b: Vec<String>) -> Py
                                 e
                             )));
                         }
-                        if std::env::var("FUZZGPU_DEBUG").is_ok() {
+                        if is_debug_mode() {
                             eprintln!("fuzzgpu [fallback]: GPU matrix failed ({}), switching to Rayon CPU", e);
                         }
                     }
@@ -131,30 +148,30 @@ fn damerau_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
     py.allow_threads(|| Ok(fuzzgpu_core::damerau_ratio(a, b)))
 }
 
-// ── Needleman-Wunsch ────────────────────────────────────────
+// ── Needleman-Wunsch (i64 Score Support) ─────────────────────
 
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, match_score, mismatch_score, gap_penalty, /)")]
-fn needleman_wunsch_score(py: Python, a: &str, b: &str, match_score: i32, mismatch_score: i32, gap_penalty: i32) -> PyResult<i32> {
+fn needleman_wunsch_score(py: Python, a: &str, b: &str, match_score: i64, mismatch_score: i64, gap_penalty: i64) -> PyResult<i64> {
     py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch(a, b, match_score, mismatch_score, gap_penalty)))
 }
 
 #[pyfunction]
 #[pyo3(text_signature = "(query, candidates, match_score, mismatch_score, gap_penalty, /)")]
-fn needleman_wunsch_batch_fn(py: Python, query: String, candidates: Vec<String>, match_score: i32, mismatch_score: i32, gap_penalty: i32) -> PyResult<Vec<i32>> {
+fn needleman_wunsch_batch_fn(py: Python, query: String, candidates: Vec<String>, match_score: i64, mismatch_score: i64, gap_penalty: i64) -> PyResult<Vec<i64>> {
     let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
     py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch_batch(&query, &refs, match_score, mismatch_score, gap_penalty)))
 }
 
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, match_score, mismatch_score, gap_open, gap_extend, /)")]
-fn needleman_wunsch_affine(py: Python, a: &str, b: &str, match_score: i32, mismatch_score: i32, gap_open: i32, gap_extend: i32) -> PyResult<i32> {
+fn needleman_wunsch_affine(py: Python, a: &str, b: &str, match_score: i64, mismatch_score: i64, gap_open: i64, gap_extend: i64) -> PyResult<i64> {
     py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch_affine(a, b, match_score, mismatch_score, gap_open, gap_extend)))
 }
 
 #[pyfunction]
 #[pyo3(text_signature = "(query, candidates, match_score, mismatch_score, gap_open, gap_extend, /)")]
-fn needleman_wunsch_affine_batch(py: Python, query: String, candidates: Vec<String>, match_score: i32, mismatch_score: i32, gap_open: i32, gap_extend: i32) -> PyResult<Vec<i32>> {
+fn needleman_wunsch_affine_batch(py: Python, query: String, candidates: Vec<String>, match_score: i64, mismatch_score: i64, gap_open: i64, gap_extend: i64) -> PyResult<Vec<i64>> {
     let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
     py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch_affine_batch(&query, &refs, match_score, mismatch_score, gap_open, gap_extend)))
 }
@@ -200,7 +217,7 @@ fn jaro_winkler_batch_fn(py: Python, query: String, candidates: Vec<String>, p: 
                                 e
                             )));
                         }
-                        if std::env::var("FUZZGPU_DEBUG").is_ok() {
+                        if is_debug_mode() {
                             eprintln!("fuzzgpu [fallback]: GPU kernel failed ({}), switching to Rayon CPU", e);
                         }
                     }
@@ -235,7 +252,7 @@ fn jaro_winkler_cdist(py: Python, list_a: Vec<String>, list_b: Vec<String>, p: f
                                 e
                             )));
                         }
-                        if std::env::var("FUZZGPU_DEBUG").is_ok() {
+                        if is_debug_mode() {
                             eprintln!("fuzzgpu [fallback]: GPU matrix failed ({}), switching to Rayon CPU", e);
                         }
                     }
@@ -315,7 +332,7 @@ fn levenshtein_myers(py: Python, a: &str, b: &str) -> PyResult<u32> {
 
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, match_score, mismatch_score, gap_penalty, /)")]
-fn needleman_wunsch_striped(py: Python, a: &str, b: &str, match_score: i32, mismatch_score: i32, gap_penalty: i32) -> PyResult<i32> {
+fn needleman_wunsch_striped(py: Python, a: &str, b: &str, match_score: i64, mismatch_score: i64, gap_penalty: i64) -> PyResult<i64> {
     py.allow_threads(|| {
         if a.is_ascii() && b.is_ascii() {
             Ok(fuzzgpu_core::needleman_wunsch_striped(a.as_bytes(), b.as_bytes(), match_score, mismatch_score, gap_penalty))
@@ -367,14 +384,20 @@ fn is_gpu_available() -> bool {
 
 #[pyfunction]
 #[pyo3(text_signature = "()")]
-fn warmup() -> bool {
+fn warmup() -> (bool, String) {
     #[cfg(feature = "gpu")]
     {
-        GpuEngine::get().is_ok()
+        if GpuEngine::is_cpu_only() {
+            return (false, "CPU-only mode is active (set via set_cpu_only or FUZZGPU_USE_CPU)".into());
+        }
+        match GpuEngine::get() {
+            Ok(engine) => (true, format!("GPU initialized: {} ({})", engine.info.name, engine.info.backend)),
+            Err(e) => (false, format!("GPU initialization failed ({}), using Rayon CPU fallback", e)),
+        }
     }
     #[cfg(not(feature = "gpu"))]
     {
-        true
+        (false, "Built without GPU support (cpu-only)".into())
     }
 }
 
@@ -388,7 +411,7 @@ fn gpu_info() -> PyResult<String> {
         }
         match GpuEngine::get() {
             Ok(engine) => Ok(format!("{} ({})", engine.info.name, engine.info.backend)),
-            Err(_) => Ok("CPU-only fallback mode (no GPU device detected)".into()),
+            Err(e) => Ok(format!("CPU-only fallback mode (GPU unavailable: {})", e)),
         }
     }
     #[cfg(not(feature = "gpu"))]

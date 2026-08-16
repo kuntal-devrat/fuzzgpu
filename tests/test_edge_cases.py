@@ -336,3 +336,18 @@ class TestAlgorithmicEdgeScenarios:
         assert fuzzgpu.levenshtein_myers("café", "cafe") == 1
         assert fuzzgpu.levenshtein_myers("🚀", "") == 1
         assert fuzzgpu.jaro_optimized("café", "cafe") > 0.8
+
+    def test_needleman_i64_large_scores(self):
+        """Test that Needleman-Wunsch scores safely handle values exceeding 32-bit integer limits."""
+        large_match = 5_000_000_000
+        score = fuzzgpu.needleman_wunsch("AGCT", "AGCT", large_match, -1, -2)
+        assert score == 4 * large_match
+        score_affine = fuzzgpu.needleman_wunsch_affine("AGCT", "AGCT", large_match, -1, -3, -1)
+        assert score_affine == 4 * large_match
+
+    def test_warmup_diagnostics(self):
+        """Test warmup returns detailed status tuple."""
+        is_ok, msg = fuzzgpu.warmup()
+        assert isinstance(is_ok, bool)
+        assert isinstance(msg, str)
+        assert len(msg) > 0

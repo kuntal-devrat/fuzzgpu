@@ -28,6 +28,7 @@ pub struct GpuEngine {
 
 static GLOBAL_ENGINE: OnceLock<Arc<GpuEngine>> = OnceLock::new();
 static CPU_ONLY_FLAG: AtomicBool = AtomicBool::new(false);
+static ENV_CPU_CHECK: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct GpuInfo {
@@ -41,17 +42,18 @@ impl GpuEngine {
         CPU_ONLY_FLAG.store(cpu_only, Ordering::SeqCst);
     }
 
-    /// Check whether CPU-only mode is active.
+    /// Check whether CPU-only mode is active (cached, zero syscall overhead in loops).
     pub fn is_cpu_only() -> bool {
         if CPU_ONLY_FLAG.load(Ordering::Relaxed) {
             return true;
         }
-        if let Ok(v) = std::env::var("FUZZGPU_USE_CPU") {
-            if v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes") {
-                return true;
+        *ENV_CPU_CHECK.get_or_init(|| {
+            if let Ok(v) = std::env::var("FUZZGPU_USE_CPU") {
+                v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
+            } else {
+                false
             }
-        }
-        false
+        })
     }
 
     /// Returns whether a GPU device is available and ready for compute.
@@ -65,7 +67,7 @@ impl GpuEngine {
     /// Get or lazily initialize the singleton GPU engine.
     pub fn get() -> Result<Arc<Self>> {
         if Self::is_cpu_only() {
-            return Err(FuzzGpuError::NoDevice("CPU-only mode is forced (FUZZGPU_USE_CPU)".into()));
+            return Err(FuzzGpuError::NoDevice("CPU-only mode is active (FUZZGPU_USE_CPU)".into()));
         }
 
         if let Some(engine) = GLOBAL_ENGINE.get() {
@@ -105,7 +107,7 @@ impl GpuEngine {
             backend: format!("{:?}", adapter_info.backend),
         };
 
-        // Query adapter limits dynamically rather than blindly hardcoding 128MB
+        // Query adapter limits dynamically rather than hardcoding static limits
         let adapter_limits = adapter.limits();
         let target_storage_size = (128 * 1024 * 1024).min(adapter_limits.max_storage_buffer_binding_size);
         let target_buffer_size = (128 * 1024 * 1024).min(adapter_limits.max_buffer_size);
@@ -113,7 +115,7 @@ impl GpuEngine {
         let required_limits = wgpu::Limits {
             max_storage_buffer_binding_size: target_storage_size,
             max_buffer_size: target_buffer_size,
-            max_compute_workgroup_storage_size: 16 * 1024.min(adapter_limits.max_compute_workgroup_storage_size),
+            max_compute_workgroup_storage_size: 16384.min(adapter_limits.max_compute_workgroup_storage_size),
             max_compute_invocations_per_workgroup: 256.min(adapter_limits.max_compute_invocations_per_workgroup),
             ..Default::default()
         };
@@ -121,31 +123,24 @@ impl GpuEngine {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    label: Some("fuzzgpu"),
+                    label: Some("fuzzgpu device"),
                     required_features: wgpu::Features::empty(),
                     required_limits,
-                    memory_hints: wgpu::MemoryHints::Performance,
+                    memory_hints: Default::default(),
                 },
                 None,
             )
             .await
             .map_err(|e| FuzzGpuError::NoDevice(format!("Failed to create GPU device: {}", e)))?;
 
-        if std::env::var("FUZZGPU_DEBUG").is_ok() {
-            eprintln!(
-                "fuzzgpu: Initialized {} ({}) with max buffer size {} MB",
-                info.name,
-                info.backend,
-                target_buffer_size / (1024 * 1024)
-            );
-        }
-
-        Ok(Arc::new(Self {
+        let engine = Arc::new(Self {
             device,
             queue,
             info,
-            max_buffer_size: target_buffer_size,
+            max_buffer_size: target_buffer_size as u64,
             max_storage_buffer_binding_size: target_storage_size,
-        }))
+        });
+
+        Ok(engine)
     }
 }
