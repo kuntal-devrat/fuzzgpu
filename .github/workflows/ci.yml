@@ -9,7 +9,7 @@ on:
 
 jobs:
   test:
-    name: Test on ${{ matrix.os }}
+    name: Test on ${{ matrix.os }} (Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -29,11 +29,11 @@ jobs:
       - name: Rust Cargo Tests
         run: cargo test --workspace --verbose
 
-      - name: Install maturin & pytest
+      - name: Install dependencies
         run: pip install maturin pytest pytest-timeout
 
       - name: Build & install extension
-        run: maturin develop --manifest-path crates/fuzzgpu-python/Cargo.toml
+        run: pip install .
 
       - name: Run Python Test Suite
         run: pytest tests -v
