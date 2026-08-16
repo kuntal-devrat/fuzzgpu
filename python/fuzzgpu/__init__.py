@@ -104,6 +104,19 @@ extract = fuzz_extract
 extractOne = fuzz_extract_one
 extract_one = fuzz_extract_one
 
+# rapidfuzz-style compatibility namespaces.  These are Python façades over the
+# accelerated extension and accept scorer/processor/cutoff keyword arguments.
+from . import fuzz, process, distance
+
+# Prefer the richer compatibility signatures at the package root as well.
+ratio = fuzz.ratio
+partial_ratio = fuzz.partial_ratio
+token_sort_ratio = fuzz.token_sort_ratio
+token_set_ratio = fuzz.token_set_ratio
+wratio = WRatio = fuzz.WRatio
+extract = fuzz.extract
+extract_one = extractOne = fuzz.extractOne
+
 __all__ = [
     # Core API
     "levenshtein_distance", "levenshtein_batch", "levenshtein_batch_into", "levenshtein_cdist", "levenshtein_cdist_into",
@@ -119,4 +132,5 @@ __all__ = [
     "jaro", "jaro_winkler", "jaro_winkler_batch", "ratio", "partial_ratio",
     "token_sort_ratio", "token_set_ratio", "wratio", "WRatio", "ratio_batch",
     "extract", "extractOne", "extract_one",
+    "fuzz", "process", "distance",
 ]

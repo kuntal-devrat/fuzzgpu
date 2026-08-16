@@ -16,7 +16,11 @@ pub fn levenshtein_myers(a: &[u8], b: &[u8]) -> u32 {
     // characters. Callers (Python/JS bindings) gate on `is_ascii()` first and fall
     // back to the Unicode path. Assert it here so direct Rust callers can't
     // silently get byte-semantics results.
-    assert!(a.is_ascii() && b.is_ascii(), "levenshtein_myers requires ASCII inputs");
+    if !a.is_ascii() || !b.is_ascii() {
+        let a = String::from_utf8_lossy(a);
+        let b = String::from_utf8_lossy(b);
+        return crate::levenshtein::levenshtein_distance_raw(&a, &b);
+    }
     let (m, n) = (a.len(), b.len());
     if m == 0 { return n as u32; }
     if n == 0 { return m as u32; }
@@ -1412,9 +1416,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "levenshtein_myers requires ASCII inputs")]
-    fn test_myers_rejects_non_ascii() {
-        let _ = levenshtein_myers("café".as_bytes(), b"cafe");
+    fn test_myers_handles_non_ascii_without_panicking() {
+        assert_eq!(levenshtein_myers("café".as_bytes(), b"cafe"), 1);
     }
 
     #[test]

@@ -26,11 +26,13 @@ pub(crate) fn require_gpu() -> bool {
     std::env::var("FUZZGPU_REQUIRE_GPU")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
-}    /// Whether the dispatch-serialization workaround is bypassed. Shared by the
-    /// test-only lock below and the production [`GpuEngine::dispatch_lock`] so
-    /// `FUZZGPU_SKIP_DISPATCH_LOCK=1` disables BOTH — the repro harness needs the
-    /// bypass to reproduce upstream gfx-rs/wgpu#10085 under real concurrency.
-    pub fn dispatch_lock_bypass() -> bool {
+}
+
+/// Whether the dispatch-serialization workaround is bypassed. Shared by the
+/// test-only lock below and the production [`GpuEngine::dispatch_lock`] so
+/// `FUZZGPU_SKIP_DISPATCH_LOCK=1` disables BOTH — the repro harness needs the
+/// bypass to reproduce upstream gfx-rs/wgpu#10085 under real concurrency.
+pub(crate) fn dispatch_lock_bypass() -> bool {
     std::env::var("FUZZGPU_SKIP_DISPATCH_LOCK")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)

@@ -19,24 +19,26 @@ pub fn levenshtein_distance_raw(a: &str, b: &str) -> u32 {
 
 fn levenshtein_distance_slice<T: PartialEq>(a: &[T], b: &[T]) -> u32 {
     let (m, n) = (a.len(), b.len());
-    if m == 0 { return n as u32; }
-    if n == 0 { return m as u32; }
+    if m == 0 { return u32::try_from(n).unwrap_or(u32::MAX); }
+    if n == 0 { return u32::try_from(m).unwrap_or(u32::MAX); }
     if a == b { return 0; }
 
     // Single-row + diagonal optimization: halves memory vs two-row.
     let mut row = vec![0u32; n + 1];
     for (j, item) in row.iter_mut().enumerate() {
-        *item = j as u32;
+        *item = u32::try_from(j).unwrap_or(u32::MAX);
     }
 
     for i in 1..=m {
         let mut prev_diag = row[0];
-        row[0] = i as u32;
+        row[0] = u32::try_from(i).unwrap_or(u32::MAX);
         let ai = &a[i - 1];
         for j in 1..=n {
             let old = row[j];
             let cost = if ai == &b[j - 1] { 0 } else { 1 };
-            row[j] = (prev_diag + cost).min(row[j] + 1).min(row[j - 1] + 1);
+            row[j] = prev_diag.saturating_add(cost)
+                .min(row[j].saturating_add(1))
+                .min(row[j - 1].saturating_add(1));
             prev_diag = old;
         }
     }

@@ -20,7 +20,7 @@ fn damerau_bytes(a: &[u8], b: &[u8]) -> u32 {
     // value, so non-ASCII bytes would silently produce wrong distances (byte-level
     // collisions between UTF-8 continuation bytes and ASCII). `assert!` survives
     // release builds, which is what PyPI wheels ship.
-    assert!(a.is_ascii() && b.is_ascii(), "damerau_bytes requires ASCII inputs");
+    debug_assert!(a.is_ascii() && b.is_ascii(), "damerau_bytes requires ASCII inputs");
     let (m, n) = (a.len(), b.len());
     if m == 0 { return n as u32; }
     if n == 0 { return m as u32; }

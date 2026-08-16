@@ -1,0 +1,15 @@
+from ._common import cutoff_distance, normalized_distance as _normalized
+
+def distance(s1, s2, *, processor=None, score_cutoff=None, score_hint=None):
+    del score_hint
+    if processor: s1, s2 = processor(s1), processor(s2)
+    row = [0] * (len(s2) + 1)
+    for a in s1:
+        diagonal = 0
+        for j, b in enumerate(s2, 1):
+            old = row[j]; row[j] = diagonal + 1 if a == b else max(row[j], row[j - 1]); diagonal = old
+    value = len(s1) + len(s2) - 2 * row[-1]
+    return cutoff_distance(value, score_cutoff)
+def similarity(s1, s2, **kwargs): return len(s1) + len(s2) - distance(s1, s2, **kwargs)
+def normalized_distance(s1, s2, **kwargs): return _normalized(distance(s1, s2, **kwargs), len(s1) + len(s2))
+def normalized_similarity(s1, s2, **kwargs): return 1.0 - normalized_distance(s1, s2, **kwargs)

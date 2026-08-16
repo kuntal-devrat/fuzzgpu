@@ -197,24 +197,8 @@ fn write_f64_array2(mut rw: numpy::PyReadwriteArray2<'_, f64>, values: impl Into
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, /)")]
 fn levenshtein_distance(py: Python, a: &str, b: &str) -> PyResult<u32> {
-    #[cfg(feature = "gpu")]
-    {
-        if !GpuEngine::is_cpu_only() {
-            if let Ok(kernel) = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get() {
-                match py.allow_threads(|| kernel.compute(&[(a, b)])) {
-                    Ok(res) => return Ok(res[0]),
-                    Err(e) => {
-                        if is_force_gpu() {
-                            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                                "GPU Levenshtein compute failed: {}",
-                                e
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // A single pair never amortizes GPU setup/upload/readback. Batch APIs
+    // retain GPU routing once that fixed cost can be amortized.
     py.allow_threads(|| Ok(fuzzgpu_core::levenshtein_distance_raw(a, b)))
 }
 
