@@ -121,7 +121,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/fuzzgpu-wasm/Cargo.toml crates/fuzzgpu-wasm/Cargo.lock
+          # Only the manifest is committed: the repo's root .gitignore rule
+          # deliberately excludes Cargo.lock (incl. the wasm crate's own lock).
+          git add crates/fuzzgpu-wasm/Cargo.toml
           if git diff --cached --quiet; then
             echo "no manifest changes to commit (bump was a no-op?)"
           else
