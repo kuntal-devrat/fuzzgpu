@@ -97,28 +97,46 @@ pub fn jaro_winkler(a: &str, b: &str, p: f64) -> f64 {
         return jaro_score;
     }
 
+    let p = p.clamp(0.0, 0.25);
+
     let prefix_len = if a.is_ascii() && b.is_ascii() {
-        a.as_bytes().iter()
-            .zip(b.as_bytes().iter())
-            .take_while(|(x, y)| x == y)
-            .count()
-            .min(4)
+        let a_bytes = a.as_bytes();
+        let b_bytes = b.as_bytes();
+        let max_prefix = a_bytes.len().min(b_bytes.len()).min(4);
+        let mut len = 0usize;
+        for i in 0..max_prefix {
+            if a_bytes[i] == b_bytes[i] {
+                len += 1;
+            } else {
+                break;
+            }
+        }
+        len
     } else {
-        a.chars().zip(b.chars())
-            .take_while(|(x, y)| x == y)
-            .count()
-            .min(4)
+        let a_chars: Vec<char> = a.chars().take(4).collect();
+        let b_chars: Vec<char> = b.chars().take(4).collect();
+        let max_prefix = a_chars.len().min(b_chars.len());
+        let mut len = 0usize;
+        for i in 0..max_prefix {
+            if a_chars[i] == b_chars[i] {
+                len += 1;
+            } else {
+                break;
+            }
+        }
+        len
     };
 
-    jaro_score + (prefix_len as f64 * p * (1.0 - jaro_score))
+    let boost = (prefix_len as f64) * p * (1.0 - jaro_score);
+    (jaro_score + boost).min(1.0)
 }
 
-/// Batch Jaro-Winkler: one query vs many candidates, parallelized with Rayon.
+/// Batch Jaro-Winkler on CPU using Rayon.
 pub fn jaro_winkler_batch(query: &str, candidates: &[&str], p: f64) -> Vec<f64> {
     candidates.par_iter().map(|c| jaro_winkler(query, c, p)).collect()
 }
 
-/// Cross-product similarity matrix on CPU via Rayon.
+/// Cross-product matrix for Jaro-Winkler on CPU using Rayon.
 pub fn jaro_winkler_cdist_cpu(list_a: &[&str], list_b: &[&str], p: f64) -> Vec<Vec<f64>> {
     if list_a.is_empty() || list_b.is_empty() {
         return vec![];
@@ -128,13 +146,17 @@ pub fn jaro_winkler_cdist_cpu(list_a: &[&str], list_b: &[&str], p: f64) -> Vec<V
     }).collect()
 }
 
-// ── GPU-accelerated Jaro-Winkler ────────────────────────────
+/// Optimized Jaro variant using stack allocations and early termination.
+pub fn jaro_optimized(a: &[u8], b: &[u8]) -> f64 {
+    jaro_bytes(a, b)
+}
 
 #[cfg(feature = "gpu")]
 pub mod gpu_ext {
     use super::*;
     use bytemuck::{Pod, Zeroable};
     use std::sync::OnceLock;
+    use std::time::Duration;
     use wgpu::util::DeviceExt;
     use crate::gpu::{FuzzGpuError, GpuEngine, Result};
 
@@ -144,7 +166,7 @@ pub mod gpu_ext {
     const GPU_THRESHOLD: usize = 500;
     const GPU_MAX_STRING_LEN: usize = 128;
     const MAX_DISPATCH: u32 = 65535;
-    const STREAMING_CHUNK_PAIRS: usize = 500_000;
+    const MAX_DESIRED_CHUNK_PAIRS: usize = 500_000;
 
     #[repr(C)]
     #[derive(Copy, Clone, Pod, Zeroable)]
@@ -231,7 +253,7 @@ pub mod gpu_ext {
             Ok(Self { engine, pipeline, matrix_pipeline, bind_group_layout })
         }
 
-        /// Smart streaming GPU/CPU dispatch for batch Jaro-Winkler with streaming chunking for >128MB.
+        /// Smart streaming GPU/CPU dispatch for batch Jaro-Winkler with dynamic chunk sizing.
         pub fn compute_batch(&self, pairs: &[(&str, &str)], p: f64) -> Result<Vec<f64>> {
             let n = pairs.len();
             if n == 0 { return Ok(vec![]); }
@@ -247,10 +269,14 @@ pub mod gpu_ext {
                     results[i] = 0.0;
                 } else if *a == *b {
                     results[i] = 1.0;
-                } else if a.len() > GPU_MAX_STRING_LEN || b.len() > GPU_MAX_STRING_LEN {
-                    cpu_indices.push(i);
                 } else {
-                    gpu_indices.push(i);
+                    let a_len = a.chars().count();
+                    let b_len = b.chars().count();
+                    if a_len > GPU_MAX_STRING_LEN || b_len > GPU_MAX_STRING_LEN {
+                        cpu_indices.push(i);
+                    } else {
+                        gpu_indices.push(i);
+                    }
                 }
             }
 
@@ -273,7 +299,13 @@ pub mod gpu_ext {
                 return Ok(results);
             }
 
-            for stream_chunk in gpu_indices.chunks(STREAMING_CHUNK_PAIRS) {
+            let max_allowed_binding = self.engine.max_storage_buffer_binding_size as usize;
+            let bytes_per_pair = (GPU_MAX_STRING_LEN * 4 * 2 + 8).max(128);
+            let dynamic_chunk_size = (max_allowed_binding / bytes_per_pair)
+                .min(MAX_DESIRED_CHUNK_PAIRS)
+                .max(512);
+
+            for stream_chunk in gpu_indices.chunks(dynamic_chunk_size) {
                 let gpu_results = self.compute_gpu_subset(pairs, stream_chunk, p)?;
                 for (idx, &orig_i) in stream_chunk.iter().enumerate() {
                     if gpu_results[idx] < 0.0 {
@@ -312,12 +344,24 @@ pub mod gpu_ext {
             if chars_a.is_empty() { chars_a.push(0); }
             if chars_b.is_empty() { chars_b.push(0); }
 
+            let chars_a_bytes = (chars_a.len() * 4) as u64;
+            let chars_b_bytes = (chars_b.len() * 4) as u64;
+            let results_size = (batch_size as u64) * 4;
+
+            if chars_a_bytes > self.engine.max_buffer_size
+                || chars_b_bytes > self.engine.max_buffer_size
+                || results_size > self.engine.max_buffer_size
+            {
+                return Err(FuzzGpuError::BufferError(
+                    "Buffer size exceeds device max_buffer_size".into(),
+                ));
+            }
+
             let buf_offsets_a = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("joa"), contents: bytemuck::cast_slice(&offsets_a), usage: wgpu::BufferUsages::STORAGE });
             let buf_chars_a = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("jca"), contents: bytemuck::cast_slice(&chars_a), usage: wgpu::BufferUsages::STORAGE });
             let buf_offsets_b = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("job"), contents: bytemuck::cast_slice(&offsets_b), usage: wgpu::BufferUsages::STORAGE });
             let buf_chars_b = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("jcb"), contents: bytemuck::cast_slice(&chars_b), usage: wgpu::BufferUsages::STORAGE });
 
-            let results_size = (batch_size as u64) * 4;
             let buf_results = self.engine.device.create_buffer(&wgpu::BufferDescriptor { label: Some("jres"), size: results_size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
             let buf_staging = self.engine.device.create_buffer(&wgpu::BufferDescriptor { label: Some("jstg"), size: results_size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
@@ -357,7 +401,11 @@ pub mod gpu_ext {
             let (tx, rx) = std::sync::mpsc::channel();
             slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
             self.engine.device.poll(wgpu::Maintain::Wait);
-            rx.recv().unwrap().map_err(|e| FuzzGpuError::BufferError(e.to_string()))?;
+
+            rx.recv_timeout(Duration::from_secs(10))
+                .map_err(|_| FuzzGpuError::Timeout("GPU Jaro readback timed out after 10s".into()))?
+                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
+
             let data = slice.get_mapped_range();
             let raw: &[u32] = bytemuck::cast_slice(&data);
             let gpu_results: Vec<f64> = raw.iter().map(|&bits| f32::from_bits(bits) as f64).collect();
@@ -366,7 +414,8 @@ pub mod gpu_ext {
             Ok(gpu_results)
         }
 
-        /// Dedicated 2D Jaro-Winkler Matrix GPU compute: O(N + M) upload instead of O(N * M)
+        /// Dedicated 2D Jaro-Winkler Matrix GPU compute: O(N + M) upload instead of O(N * M).
+        /// Pre-filters oversized strings and validates buffer limits before dispatch.
         pub fn compute_matrix(&self, list_a: &[&str], list_b: &[&str], p: f64) -> Result<Vec<Vec<f64>>> {
             let rows = list_a.len();
             let cols = list_b.len();
@@ -374,6 +423,16 @@ pub mod gpu_ext {
 
             let total_pairs = rows * cols;
             if total_pairs < GPU_THRESHOLD {
+                return Ok(jaro_winkler_cdist_cpu(list_a, list_b, p));
+            }
+
+            // CRITICAL FIX: Pre-filter oversized strings BEFORE GPU buffer allocation or dispatch
+            let has_oversized = list_a.iter().any(|s| s.chars().count() > GPU_MAX_STRING_LEN)
+                || list_b.iter().any(|s| s.chars().count() > GPU_MAX_STRING_LEN);
+
+            let matrix_size = (total_pairs as u64) * 4;
+
+            if has_oversized || matrix_size > self.engine.max_buffer_size {
                 return Ok(jaro_winkler_cdist_cpu(list_a, list_b, p));
             }
 
@@ -411,7 +470,6 @@ pub mod gpu_ext {
                 label: Some("jmcb"), contents: bytemuck::cast_slice(&chars_b), usage: wgpu::BufferUsages::STORAGE,
             });
 
-            let matrix_size = (total_pairs as u64) * 4;
             let buf_matrix = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("jmres"), size: matrix_size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
@@ -464,32 +522,19 @@ pub mod gpu_ext {
             let (tx, rx) = std::sync::mpsc::channel();
             slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
             self.engine.device.poll(wgpu::Maintain::Wait);
-            rx.recv().unwrap().map_err(|e| FuzzGpuError::BufferError(e.to_string()))?;
-            let data = slice.get_mapped_range();
-            let flat: &[u32] = bytemuck::cast_slice(&data);
 
-            let has_oversized = list_a.iter().any(|s| s.len() > GPU_MAX_STRING_LEN)
-                || list_b.iter().any(|s| s.len() > GPU_MAX_STRING_LEN);
+            rx.recv_timeout(Duration::from_secs(10))
+                .map_err(|_| FuzzGpuError::Timeout("GPU Jaro matrix readback timed out after 10s".into()))?
+                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
+
+            let data = slice.get_mapped_range();
+            let raw: &[u32] = bytemuck::cast_slice(&data);
 
             let mut matrix: Vec<Vec<f64>> = Vec::with_capacity(rows);
-            if !has_oversized {
-                for i in 0..rows {
-                    let start = i * cols;
-                    let end = start + cols;
-                    matrix.push(flat[start..end].iter().map(|&bits| f32::from_bits(bits) as f64).collect());
-                }
-            } else {
-                for i in 0..rows {
-                    let start = i * cols;
-                    let end = start + cols;
-                    let mut row: Vec<f64> = flat[start..end].iter().map(|&bits| f32::from_bits(bits) as f64).collect();
-                    for (j, val) in row.iter_mut().enumerate() {
-                        if *val < 0.0 {
-                            *val = jaro_winkler(list_a[i], list_b[j], p);
-                        }
-                    }
-                    matrix.push(row);
-                }
+            for i in 0..rows {
+                let start = i * cols;
+                let end = start + cols;
+                matrix.push(raw[start..end].iter().map(|&bits| f32::from_bits(bits) as f64).collect());
             }
 
             drop(data);

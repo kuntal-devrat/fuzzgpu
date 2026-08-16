@@ -62,6 +62,7 @@ pub mod gpu_ext {
     use super::*;
     use bytemuck::{Pod, Zeroable};
     use std::sync::OnceLock;
+    use std::time::Duration;
     use wgpu::util::DeviceExt;
     use crate::gpu::{FuzzGpuError, GpuEngine, Result};
 
@@ -71,7 +72,7 @@ pub mod gpu_ext {
     const GPU_THRESHOLD: usize = 500;
     const GPU_MAX_STRING_LEN: usize = 256;
     const MAX_DISPATCH: u32 = 65535;
-    const STREAMING_CHUNK_PAIRS: usize = 500_000;
+    const MAX_DESIRED_CHUNK_PAIRS: usize = 500_000;
 
     #[repr(C)]
     #[derive(Copy, Clone, Pod, Zeroable)]
@@ -156,7 +157,7 @@ pub mod gpu_ext {
             Ok(Self { engine, pipeline, matrix_pipeline, bind_group_layout })
         }
 
-        /// Smart streaming dispatch with streaming chunking for arbitrary dataset sizes (>128MB).
+        /// Smart streaming dispatch with dynamic buffer limit validation and chunking.
         pub fn compute(&self, pairs: &[(&str, &str)]) -> Result<Vec<u32>> {
             let n = pairs.len();
             if n == 0 { return Ok(vec![]); }
@@ -172,10 +173,14 @@ pub mod gpu_ext {
                     results[i] = (a_count.max(b_count)) as u32;
                 } else if *a == *b {
                     results[i] = 0;
-                } else if a.len() > GPU_MAX_STRING_LEN || b.len() > GPU_MAX_STRING_LEN {
-                    cpu_indices.push(i);
                 } else {
-                    gpu_indices.push(i);
+                    let a_len = a.chars().count();
+                    let b_len = b.chars().count();
+                    if a_len > GPU_MAX_STRING_LEN || b_len > GPU_MAX_STRING_LEN {
+                        cpu_indices.push(i);
+                    } else {
+                        gpu_indices.push(i);
+                    }
                 }
             }
 
@@ -198,7 +203,14 @@ pub mod gpu_ext {
                 return Ok(results);
             }
 
-            for stream_chunk in gpu_indices.chunks(STREAMING_CHUNK_PAIRS) {
+            // Calculate chunk size dynamically based on hardware limits
+            let max_allowed_binding = self.engine.max_storage_buffer_binding_size as usize;
+            let bytes_per_pair = (GPU_MAX_STRING_LEN * 4 * 2 + 8).max(128);
+            let dynamic_chunk_size = (max_allowed_binding / bytes_per_pair)
+                .min(MAX_DESIRED_CHUNK_PAIRS)
+                .max(512);
+
+            for stream_chunk in gpu_indices.chunks(dynamic_chunk_size) {
                 let chunk_results = self.compute_gpu_subset(pairs, stream_chunk)?;
                 for (idx, &orig_i) in stream_chunk.iter().enumerate() {
                     if chunk_results[idx] == 0xFFFFFFFF {
@@ -237,6 +249,20 @@ pub mod gpu_ext {
             if chars_a.is_empty() { chars_a.push(0); }
             if chars_b.is_empty() { chars_b.push(0); }
 
+            // Validate total buffer allocations against hardware max binding size
+            let chars_a_bytes = (chars_a.len() * 4) as u64;
+            let chars_b_bytes = (chars_b.len() * 4) as u64;
+            let results_size = (batch_size as u64) * 4;
+
+            if chars_a_bytes > self.engine.max_buffer_size
+                || chars_b_bytes > self.engine.max_buffer_size
+                || results_size > self.engine.max_buffer_size
+            {
+                return Err(FuzzGpuError::BufferError(
+                    "Buffer size exceeds device max_buffer_size".into(),
+                ));
+            }
+
             let buf_offsets_a = self.engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oa"), contents: bytemuck::cast_slice(&offsets_a),
                 usage: wgpu::BufferUsages::STORAGE,
@@ -254,7 +280,6 @@ pub mod gpu_ext {
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
-            let results_size = (batch_size as u64) * 4;
             let buf_results = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("res"), size: results_size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
@@ -317,7 +342,11 @@ pub mod gpu_ext {
             let (tx, rx) = std::sync::mpsc::channel();
             slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
             self.engine.device.poll(wgpu::Maintain::Wait);
-            rx.recv().unwrap().map_err(|e| FuzzGpuError::BufferError(e.to_string()))?;
+
+            rx.recv_timeout(Duration::from_secs(10))
+                .map_err(|_| FuzzGpuError::Timeout("GPU buffer mapping timed out after 10s".into()))?
+                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
+
             let data = slice.get_mapped_range();
             let gpu_results: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
             drop(data);
@@ -326,6 +355,7 @@ pub mod gpu_ext {
         }
 
         /// Dedicated 2D Matrix GPU Compute: O(N + M) data upload instead of O(N * M)
+        /// Validates string lengths and memory limits *before* any GPU dispatch.
         pub fn compute_matrix(&self, list_a: &[&str], list_b: &[&str]) -> Result<Vec<Vec<u32>>> {
             let rows = list_a.len();
             let cols = list_b.len();
@@ -334,6 +364,17 @@ pub mod gpu_ext {
             let total_pairs = rows * cols;
             // Small matrices (< 500 pairs): compute on CPU directly with Rayon (zero PCIe transfer overhead)
             if total_pairs < GPU_THRESHOLD {
+                return Ok(levenshtein_cdist_cpu(list_a, list_b));
+            }
+
+            // CRITICAL FIX: Pre-filter oversized strings BEFORE GPU buffer allocation or dispatch
+            let has_oversized = list_a.iter().any(|s| s.chars().count() > GPU_MAX_STRING_LEN)
+                || list_b.iter().any(|s| s.chars().count() > GPU_MAX_STRING_LEN);
+
+            let matrix_size = (total_pairs as u64) * 4;
+
+            // If strings exceed GPU shader capacity (256 chars) or matrix exceeds GPU buffer limit, fall back to CPU immediately
+            if has_oversized || matrix_size > self.engine.max_buffer_size {
                 return Ok(levenshtein_cdist_cpu(list_a, list_b));
             }
 
@@ -375,7 +416,6 @@ pub mod gpu_ext {
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
-            let matrix_size = (total_pairs as u64) * 4;
             let buf_matrix = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("mres"), size: matrix_size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
@@ -430,32 +470,19 @@ pub mod gpu_ext {
             let (tx, rx) = std::sync::mpsc::channel();
             slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
             self.engine.device.poll(wgpu::Maintain::Wait);
-            rx.recv().unwrap().map_err(|e| FuzzGpuError::BufferError(e.to_string()))?;
+
+            rx.recv_timeout(Duration::from_secs(10))
+                .map_err(|_| FuzzGpuError::Timeout("GPU matrix readback timed out after 10s".into()))?
+                .map_err(|e| FuzzGpuError::BufferError(format!("GPU matrix buffer map failed: {}", e)))?;
+
             let data = slice.get_mapped_range();
             let flat: &[u32] = bytemuck::cast_slice(&data);
 
-            let has_oversized = list_a.iter().any(|s| s.len() > GPU_MAX_STRING_LEN)
-                || list_b.iter().any(|s| s.len() > GPU_MAX_STRING_LEN);
-
             let mut matrix: Vec<Vec<u32>> = Vec::with_capacity(rows);
-            if !has_oversized {
-                for i in 0..rows {
-                    let start = i * cols;
-                    let end = start + cols;
-                    matrix.push(flat[start..end].to_vec());
-                }
-            } else {
-                for i in 0..rows {
-                    let start = i * cols;
-                    let end = start + cols;
-                    let mut row = flat[start..end].to_vec();
-                    for (j, val) in row.iter_mut().enumerate() {
-                        if *val == 0xFFFFFFFF {
-                            *val = levenshtein_distance_raw(list_a[i], list_b[j]);
-                        }
-                    }
-                    matrix.push(row);
-                }
+            for i in 0..rows {
+                let start = i * cols;
+                let end = start + cols;
+                matrix.push(flat[start..end].to_vec());
             }
 
             drop(data);

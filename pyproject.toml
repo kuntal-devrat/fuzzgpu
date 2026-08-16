@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "fuzzgpu"
-version = "0.1.1"
+version = "0.1.2"
 description = "Hardware-accelerated fuzzy string matching & sequence alignment — cross-platform, no CUDA required"
 readme = "README.md"
 license = { text = "MIT" }
@@ -36,4 +36,4 @@ features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "fuzzgpu.fuzzgpu"
 manifest-path = "crates/fuzzgpu-python/Cargo.toml"
-include = ["assets/**/*", "README.md", "LICENSE"]
+include = ["assets/**/*", "tests/**/*", "benches/**/*", "crates/**/*", "README.md", "LICENSE"]

@@ -25,25 +25,25 @@ fn needleman_wunsch_chars(a: &[char], b: &[char], match_score: i32, mismatch_sco
 fn needleman_wunsch_slice<T: PartialEq>(a: &[T], b: &[T], match_score: i32, mismatch_score: i32, gap_penalty: i32) -> i32 {
     let (m, n) = (a.len(), b.len());
 
-    if m == 0 { return (n as i32) * gap_penalty; }
-    if n == 0 { return (m as i32) * gap_penalty; }
-    if a == b { return (m as i32) * match_score; }
+    if m == 0 { return (n as i32).saturating_mul(gap_penalty); }
+    if n == 0 { return (m as i32).saturating_mul(gap_penalty); }
+    if a == b { return (m as i32).saturating_mul(match_score); }
 
     let mut row = vec![0i32; n + 1];
     for (j, item) in row.iter_mut().enumerate() {
-        *item = (j as i32) * gap_penalty;
+        *item = (j as i32).saturating_mul(gap_penalty);
     }
 
     for i in 1..=m {
         let mut prev_diag = row[0];
-        row[0] = (i as i32) * gap_penalty;
+        row[0] = (i as i32).saturating_mul(gap_penalty);
         let ai = &a[i - 1];
         for j in 1..=n {
             let old = row[j];
             let score = if ai == &b[j - 1] { match_score } else { mismatch_score };
-            row[j] = (prev_diag + score)
-                .max(row[j] + gap_penalty)
-                .max(row[j - 1] + gap_penalty);
+            row[j] = (prev_diag.saturating_add(score))
+                .max(row[j].saturating_add(gap_penalty))
+                .max(row[j - 1].saturating_add(gap_penalty));
             prev_diag = old;
         }
     }

@@ -1,6 +1,6 @@
 [package]
 name = "fuzzgpu-python"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Python bindings for FuzzGPU: GPU-accelerated fuzzy string matching engine"
 license = "MIT"
@@ -17,6 +17,6 @@ default = ["gpu"]
 gpu = ["fuzzgpu-core/gpu"]
 
 [dependencies]
-fuzzgpu-core = { path = "../fuzzgpu-core", version = "0.1.1", default-features = false }
+fuzzgpu-core = { path = "../fuzzgpu-core", version = "0.1.2", default-features = false }
 pyo3 = { workspace = true, features = ["abi3-py39"] }
 pollster = { workspace = true }

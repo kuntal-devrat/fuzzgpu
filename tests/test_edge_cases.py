@@ -302,3 +302,37 @@ class TestAlgorithmicEdgeScenarios:
         res_exact = fuzz.extract("apple", choices, score_cutoff=100.0, limit=5)
         assert len(res_exact) == 1
         assert res_exact[0][0] == "apple"
+
+    def test_jaro_winkler_p_validation(self):
+        """Test that p < 0.0 or p > 0.25 raises ValueError."""
+        with pytest.raises(ValueError):
+            fuzzgpu.jaro_winkler_similarity("apple", "apply", -0.1)
+        with pytest.raises(ValueError):
+            fuzzgpu.jaro_winkler_similarity("apple", "apply", 0.3)
+        with pytest.raises(ValueError):
+            fuzzgpu.jaro_winkler_batch("apple", ["apply"], 1.5)
+        with pytest.raises(ValueError):
+            fuzzgpu.jaro_winkler_cdist(["apple"], ["apply"], -0.01)
+
+    def test_matrix_with_oversized_strings(self):
+        """Test matrix cdist with strings exceeding GPU limit (>256 chars) gracefully compute on CPU."""
+        long_a = "A" * 300 + "B" * 200
+        long_b = "A" * 300 + "C" * 200
+        mat = fuzzgpu.levenshtein_cdist([long_a, "short"], [long_b, "short"])
+        assert len(mat) == 2
+        assert len(mat[0]) == 2
+        assert mat[0][0] == 200
+        assert mat[1][1] == 0
+
+    def test_cpu_only_control(self):
+        """Test setting cpu_only flag."""
+        fuzzgpu.set_cpu_only(True)
+        assert fuzzgpu.gpu_info().startswith("CPU-only")
+        assert fuzzgpu.levenshtein("kitten", "sitting") == 3
+        fuzzgpu.set_cpu_only(False)
+
+    def test_optimized_variants_unicode_safety(self):
+        """Test that optimized variants correctly handle Unicode strings without byte miscounting."""
+        assert fuzzgpu.levenshtein_myers("café", "cafe") == 1
+        assert fuzzgpu.levenshtein_myers("🚀", "") == 1
+        assert fuzzgpu.jaro_optimized("café", "cafe") > 0.8

@@ -152,7 +152,8 @@ pub fn damerau_levenshtein_cdist(list_a: &[&str], list_b: &[&str]) -> Vec<Vec<u3
     }).collect()
 }
 
-/// Damerau-Levenshtein normalized ratio (0.0 to 100.0) based on Sørensen-Dice formula.
+/// Damerau-Levenshtein normalized ratio (0.0 to 100.0) based on standard edit distance similarity formula:
+/// `((total_len - dist) / total_len) * 100.0`.
 pub fn damerau_ratio(s1: &str, s2: &str) -> f64 {
     let len_a = if s1.is_ascii() { s1.len() } else { s1.chars().count() };
     let len_b = if s2.is_ascii() { s2.len() } else { s2.chars().count() };
