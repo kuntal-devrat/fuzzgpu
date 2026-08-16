@@ -3,11 +3,19 @@ use rayon::prelude::*;
 /// Jaro similarity between two strings.
 ///
 /// Returns 1.0 for identical strings (including both empty), 0.0 if no matches.
+/// Supports both ASCII fast-path and full Unicode characters.
 pub fn jaro(a: &str, b: &str) -> f64 {
-    let a = a.as_bytes();
-    let b = b.as_bytes();
-    let (m, n) = (a.len(), b.len());
+    if a.is_ascii() && b.is_ascii() {
+        jaro_bytes(a.as_bytes(), b.as_bytes())
+    } else {
+        let a_chars: Vec<char> = a.chars().collect();
+        let b_chars: Vec<char> = b.chars().collect();
+        jaro_chars(&a_chars, &b_chars)
+    }
+}
 
+fn jaro_bytes(a: &[u8], b: &[u8]) -> f64 {
+    let (m, n) = (a.len(), b.len());
     if m == 0 && n == 0 { return 1.0; }
     if m == 0 || n == 0 { return 0.0; }
     if a == b { return 1.0; }
@@ -17,25 +25,44 @@ pub fn jaro(a: &str, b: &str) -> f64 {
     if m <= 128 && n <= 128 {
         let mut a_matches = [false; 128];
         let mut b_matches = [false; 128];
-        jaro_inner(a, b, &mut a_matches[..m], &mut b_matches[..n], match_distance)
+        jaro_inner_slice(a, b, &mut a_matches[..m], &mut b_matches[..n], match_distance)
     } else {
         let mut a_matches = vec![false; m];
         let mut b_matches = vec![false; n];
-        jaro_inner(a, b, &mut a_matches, &mut b_matches, match_distance)
+        jaro_inner_slice(a, b, &mut a_matches, &mut b_matches, match_distance)
+    }
+}
+
+fn jaro_chars(a: &[char], b: &[char]) -> f64 {
+    let (m, n) = (a.len(), b.len());
+    if m == 0 && n == 0 { return 1.0; }
+    if m == 0 || n == 0 { return 0.0; }
+    if a == b { return 1.0; }
+
+    let match_distance = (m.max(n) / 2).saturating_sub(1);
+
+    if m <= 128 && n <= 128 {
+        let mut a_matches = [false; 128];
+        let mut b_matches = [false; 128];
+        jaro_inner_slice(a, b, &mut a_matches[..m], &mut b_matches[..n], match_distance)
+    } else {
+        let mut a_matches = vec![false; m];
+        let mut b_matches = vec![false; n];
+        jaro_inner_slice(a, b, &mut a_matches, &mut b_matches, match_distance)
     }
 }
 
 #[inline]
-fn jaro_inner(a: &[u8], b: &[u8], a_matches: &mut [bool], b_matches: &mut [bool], match_distance: usize) -> f64 {
+fn jaro_inner_slice<T: PartialEq>(a: &[T], b: &[T], a_matches: &mut [bool], b_matches: &mut [bool], match_distance: usize) -> f64 {
     let (m, n) = (a.len(), b.len());
     let mut matches = 0u32;
 
     for i in 0..m {
         let lo = i.saturating_sub(match_distance);
         let hi = (i + match_distance + 1).min(n);
-        let ai = a[i];
+        let ai = &a[i];
         for j in lo..hi {
-            if b_matches[j] || ai != b[j] { continue; }
+            if b_matches[j] || ai != &b[j] { continue; }
             a_matches[i] = true;
             b_matches[j] = true;
             matches += 1;
@@ -61,15 +88,27 @@ fn jaro_inner(a: &[u8], b: &[u8], a_matches: &mut [bool], b_matches: &mut [bool]
 
 /// Jaro-Winkler similarity with prefix bonus.
 /// `p` is the prefix weight (0.0–0.25, default 0.1).
+/// Winkler prefix boost is applied when base Jaro similarity is >= 0.7 (Winkler 1990 standard).
 pub fn jaro_winkler(a: &str, b: &str, p: f64) -> f64 {
     if a == b { return 1.0; }
 
     let jaro_score = jaro(a, b);
-    let prefix_len = a.as_bytes().iter()
-        .zip(b.as_bytes().iter())
-        .take_while(|(x, y)| x == y)
-        .count()
-        .min(4);
+    if jaro_score < 0.7 {
+        return jaro_score;
+    }
+
+    let prefix_len = if a.is_ascii() && b.is_ascii() {
+        a.as_bytes().iter()
+            .zip(b.as_bytes().iter())
+            .take_while(|(x, y)| x == y)
+            .count()
+            .min(4)
+    } else {
+        a.chars().zip(b.chars())
+            .take_while(|(x, y)| x == y)
+            .count()
+            .min(4)
+    };
 
     jaro_score + (prefix_len as f64 * p * (1.0 - jaro_score))
 }
@@ -261,11 +300,13 @@ pub mod gpu_ext {
             let mut max_len = 0u32;
             for &i in indices {
                 let (a, b) = pairs[i];
-                chars_a.extend(a.bytes().map(|c| c as u32));
+                chars_a.extend(a.chars().map(|c| c as u32));
                 offsets_a.push(chars_a.len() as u32);
-                chars_b.extend(b.bytes().map(|c| c as u32));
+                chars_b.extend(b.chars().map(|c| c as u32));
                 offsets_b.push(chars_b.len() as u32);
-                max_len = max_len.max(a.len().max(b.len()) as u32);
+                let a_count = a.chars().count();
+                let b_count = b.chars().count();
+                max_len = max_len.max(a_count.max(b_count) as u32);
             }
 
             if chars_a.is_empty() { chars_a.push(0); }
@@ -341,7 +382,7 @@ pub mod gpu_ext {
             let mut chars_a: Vec<u32> = Vec::new();
             offsets_a.push(0);
             for a in list_a {
-                chars_a.extend(a.bytes().map(|c| c as u32));
+                chars_a.extend(a.chars().map(|c| c as u32));
                 offsets_a.push(chars_a.len() as u32);
             }
 
@@ -350,7 +391,7 @@ pub mod gpu_ext {
             let mut chars_b: Vec<u32> = Vec::new();
             offsets_b.push(0);
             for b in list_b {
-                chars_b.extend(b.bytes().map(|c| c as u32));
+                chars_b.extend(b.chars().map(|c| c as u32));
                 offsets_b.push(chars_b.len() as u32);
             }
 

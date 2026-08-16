@@ -320,4 +320,4 @@ class TestJaroOptimized:
 
 class TestVersion:
     def test_version_string(self):
-        assert fuzzgpu.__version__ == "0.1.0"
+        assert fuzzgpu.__version__ == "0.1.1"

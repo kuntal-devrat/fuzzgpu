@@ -104,17 +104,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let t_f = f32(transpositions);
     let jaro = (m_f / a_f + m_f / b_f + (m_f - t_f / 2.0) / m_f) / 3.0;
 
-    let p = bitcast<f32>(params.winkler_p_bits);
-    var prefix_len = 0u;
-    let max_prefix = min(min(a_len, b_len), 4u);
-    for (var i = 0u; i < max_prefix; i++) {
-        if (chars_a[a_start + i] == chars_b[b_start + i]) {
-            prefix_len += 1u;
-        } else {
-            break;
+    // Winkler prefix bonus (standard Winkler 1990: only when jaro >= 0.7)
+    var jw = jaro;
+    if (jaro >= 0.7) {
+        let p = bitcast<f32>(params.winkler_p_bits);
+        var prefix_len = 0u;
+        let max_prefix = min(min(a_len, b_len), 4u);
+        for (var i = 0u; i < max_prefix; i++) {
+            if (chars_a[a_start + i] == chars_b[b_start + i]) {
+                prefix_len += 1u;
+            } else {
+                break;
+            }
         }
+        jw = jaro + f32(prefix_len) * p * (1.0 - jaro);
     }
-
-    let jw = jaro + f32(prefix_len) * p * (1.0 - jaro);
     matrix[out_idx] = bitcast<u32>(jw);
 }

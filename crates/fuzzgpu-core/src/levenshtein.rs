@@ -1,9 +1,18 @@
 use rayon::prelude::*;
 
 /// Standard single-row DP Levenshtein distance with diagonal optimization.
+/// Supports both ASCII (byte-fast path) and Unicode characters (scalar value codepoint path).
 pub fn levenshtein_distance_raw(a: &str, b: &str) -> u32 {
-    let a = a.as_bytes();
-    let b = b.as_bytes();
+    if a.is_ascii() && b.is_ascii() {
+        levenshtein_distance_slice(a.as_bytes(), b.as_bytes())
+    } else {
+        let a_chars: Vec<char> = a.chars().collect();
+        let b_chars: Vec<char> = b.chars().collect();
+        levenshtein_distance_slice(&a_chars, &b_chars)
+    }
+}
+
+fn levenshtein_distance_slice<T: PartialEq>(a: &[T], b: &[T]) -> u32 {
     let (m, n) = (a.len(), b.len());
     if m == 0 { return n as u32; }
     if n == 0 { return m as u32; }
@@ -18,10 +27,10 @@ pub fn levenshtein_distance_raw(a: &str, b: &str) -> u32 {
     for i in 1..=m {
         let mut prev_diag = row[0];
         row[0] = i as u32;
-        let ai = a[i - 1];
+        let ai = &a[i - 1];
         for j in 1..=n {
             let old = row[j];
-            let cost = if ai == b[j - 1] { 0 } else { 1 };
+            let cost = if ai == &b[j - 1] { 0 } else { 1 };
             row[j] = (prev_diag + cost).min(row[j] + 1).min(row[j - 1] + 1);
             prev_diag = old;
         }
@@ -158,7 +167,9 @@ pub mod gpu_ext {
 
             for (i, (a, b)) in pairs.iter().enumerate() {
                 if a.is_empty() || b.is_empty() {
-                    results[i] = (a.len().max(b.len())) as u32;
+                    let a_count = if a.is_ascii() { a.len() } else { a.chars().count() };
+                    let b_count = if b.is_ascii() { b.len() } else { b.chars().count() };
+                    results[i] = (a_count.max(b_count)) as u32;
                 } else if *a == *b {
                     results[i] = 0;
                 } else if a.len() > GPU_MAX_STRING_LEN || b.len() > GPU_MAX_STRING_LEN {
@@ -214,11 +225,13 @@ pub mod gpu_ext {
             let mut max_len = 0u32;
             for &i in indices {
                 let (a, b) = pairs[i];
-                chars_a.extend(a.bytes().map(|c| c as u32));
+                chars_a.extend(a.chars().map(|c| c as u32));
                 offsets_a.push(chars_a.len() as u32);
-                chars_b.extend(b.bytes().map(|c| c as u32));
+                chars_b.extend(b.chars().map(|c| c as u32));
                 offsets_b.push(chars_b.len() as u32);
-                max_len = max_len.max(a.len().max(b.len()) as u32);
+                let a_count = a.chars().count();
+                let b_count = b.chars().count();
+                max_len = max_len.max(a_count.max(b_count) as u32);
             }
 
             if chars_a.is_empty() { chars_a.push(0); }
@@ -329,7 +342,7 @@ pub mod gpu_ext {
             let mut chars_a: Vec<u32> = Vec::new();
             offsets_a.push(0);
             for a in list_a {
-                chars_a.extend(a.bytes().map(|c| c as u32));
+                chars_a.extend(a.chars().map(|c| c as u32));
                 offsets_a.push(chars_a.len() as u32);
             }
 
@@ -338,7 +351,7 @@ pub mod gpu_ext {
             let mut chars_b: Vec<u32> = Vec::new();
             offsets_b.push(0);
             for b in list_b {
-                chars_b.extend(b.bytes().map(|c| c as u32));
+                chars_b.extend(b.chars().map(|c| c as u32));
                 offsets_b.push(chars_b.len() as u32);
             }
 

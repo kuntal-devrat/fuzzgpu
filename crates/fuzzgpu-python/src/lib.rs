@@ -119,11 +119,13 @@ fn jaro_similarity(a: &str, b: &str) -> PyResult<f64> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (a, b, p = 0.1))]
 fn jaro_winkler_similarity(a: &str, b: &str, p: f64) -> PyResult<f64> {
     Ok(fuzzgpu_core::jaro_winkler(a, b, p))
 }
 
 #[pyfunction]
+#[pyo3(signature = (query, candidates, p = 0.1))]
 fn jaro_winkler_batch_fn(py: Python, query: String, candidates: Vec<String>, p: f64) -> PyResult<Vec<f64>> {
     let pairs: Vec<(&str, &str)> = candidates.iter().map(|c| (query.as_str(), c.as_str())).collect();
     #[cfg(feature = "gpu")]
@@ -144,6 +146,7 @@ fn jaro_winkler_batch_fn(py: Python, query: String, candidates: Vec<String>, p: 
 }
 
 #[pyfunction]
+#[pyo3(signature = (list_a, list_b, p = 0.1))]
 fn jaro_winkler_cdist(py: Python, list_a: Vec<String>, list_b: Vec<String>, p: f64) -> PyResult<Vec<Vec<f64>>> {
     let refs_a: Vec<&str> = list_a.iter().map(|s| s.as_str()).collect();
     let refs_b: Vec<&str> = list_b.iter().map(|s| s.as_str()).collect();
@@ -268,6 +271,6 @@ fn fuzzgpu(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(jaro_optimized, m)?)?;
     // GPU info & version
     m.add_function(wrap_pyfunction!(gpu_info, m)?)?;
-    m.add("__version__", "0.1.0")?;
+    m.add("__version__", "0.1.1")?;
     Ok(())
 }
