@@ -601,7 +601,7 @@ impl GpuEngine {
             device,
             queue,
             info,
-            max_buffer_size: target_buffer_size as u64,
+            max_buffer_size: target_buffer_size,
             // wgpu 30 widened this limit to u64; the 128 MiB cap fits u32.
             max_storage_buffer_binding_size: target_storage_size as u32,
             dispatch_lock: std::sync::Mutex::new(()),

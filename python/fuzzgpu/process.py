@@ -129,7 +129,7 @@ def extractOne(
         candidate = (choice, score, key)
         if _qualifies(score, score_cutoff, distance) and _better(candidate, best, distance):
             best = candidate
-            if score == (0 if distance else 100.0):
+            if (distance and score == 0) or (not distance and score == 100.0):
                 break
     return best
 
@@ -187,7 +187,7 @@ def cdist(
             from . import fuzzgpu as _native
             # Apply score_cutoff: cells below threshold become 0.0 (same
             # behaviour as the per-cell slow path with score_cutoff set).
-            raw: list[list[float]] = _native.fuzz_ratio_batch  # type hint only
+            # type hint removed
             matrix: list[list[float]] = []
             for q in queries:
                 row = _native.fuzz_ratio_batch(q, choices)

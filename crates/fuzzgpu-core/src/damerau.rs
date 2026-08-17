@@ -452,7 +452,7 @@ pub mod gpu_ext {
 
                 let mut encoder = self.engine.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("damerau encoder") });
                 // Workgroup size 4 (SLM budget): one workgroup per 4 pairs.
-                let workgroups = (chunk + 3) / 4;
+                let workgroups = chunk.div_ceil(4);
                 {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
                     pass.set_pipeline(&self.pipeline);
@@ -460,7 +460,7 @@ pub mod gpu_ext {
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, buf_staging, 0, chunk_bytes);
                 let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
                 let raw: &[u32] = bytemuck::cast_slice(&bytes);
                 gpu_results.extend_from_slice(raw);
@@ -561,7 +561,7 @@ pub mod gpu_ext {
                 &wgpu::CommandEncoderDescriptor { label: Some("damerau matrix encoder") },
             );
 
-            let workgroups_x = ((cols as u32) + 3) / 4;
+            let workgroups_x = (cols as u32).div_ceil(4);
             let workgroups_y = rows as u32;
 
             {
@@ -573,7 +573,7 @@ pub mod gpu_ext {
                 pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
             }
 
-            encoder.copy_buffer_to_buffer(&buf_matrix, 0, &buf_staging, 0, matrix_size);
+            encoder.copy_buffer_to_buffer(buf_matrix, 0, buf_staging, 0, matrix_size);
             self.engine.submit(encoder);
 
             let slice = buf_staging.slice(..);

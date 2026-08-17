@@ -8,7 +8,7 @@
 
 *Cross-platform GPU compute via WebGPU (`wgpu`) & Multi-Core CPU parallelism with Rayon. Zero CUDA dependencies.*
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.5-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.6-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg?style=flat-square)](https://www.rust-lang.org)
 [![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
@@ -31,7 +31,7 @@ No NVIDIA CUDA drivers or complex toolkits required.
 
 ---
 
-## What's New in v0.1.5
+## What's New in v0.1.6
 
 ### Bug fixes
 - **Damerau-Levenshtein safety gate** now fires in release builds (`assert!` not `debug_assert!`) — non-ASCII inputs no longer silently produce wrong distances in production wheels
@@ -58,7 +58,7 @@ No NVIDIA CUDA drivers or complex toolkits required.
 ## Benchmark Results
 
 *Hardware: Intel(R) Iris(R) Xe Graphics (Vulkan) + Intel Core i7 (Rayon uses all cores)*
-*Versions: fuzzgpu 0.1.5 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
+*Versions: fuzzgpu 0.1.6 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
 *Median of 7 runs after warmup. Reproduce: `python benchmarks/bench_compare.py`*
 
 ### Levenshtein Batch (1 query × N candidates, 10-char strings)
@@ -89,7 +89,7 @@ pip install fuzzgpu
 ```toml
 # Rust
 [dependencies]
-fuzzgpu-core = "0.1.5"
+fuzzgpu-core = "0.1.6"
 ```
 
 ---
@@ -185,8 +185,8 @@ fuzzgpu.set_cpu_only(True)       # force CPU-only mode
 
 ```toml
 [dependencies]
-fuzzgpu-core = "0.1.5"                                        # GPU + CPU fallback
-# fuzzgpu-core = { version = "0.1.5", default-features = false } # CPU-only
+fuzzgpu-core = "0.1.6"                                        # GPU + CPU fallback
+# fuzzgpu-core = { version = "0.1.6", default-features = false } # CPU-only
 ```
 
 ```rust

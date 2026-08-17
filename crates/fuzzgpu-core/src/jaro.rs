@@ -541,10 +541,10 @@ pub mod gpu_ext {
                 });
 
                 let mut encoder = self.engine.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("jaro encoder") });
-                let workgroups = (chunk + 63) / 64;
+                let workgroups = chunk.div_ceil(64);
                 { let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None }); pass.set_pipeline(&self.pipeline); pass.set_bind_group(0, &bg, &[]); pass.dispatch_workgroups(workgroups, 1, 1); }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, buf_staging, 0, chunk_bytes);
                 let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
                 let raw: &[u32] = bytemuck::cast_slice(&bytes);
                 gpu_results.extend(raw.iter().map(|&bits| f32::from_bits(bits) as f64));
@@ -667,8 +667,8 @@ pub mod gpu_ext {
                 &wgpu::CommandEncoderDescriptor { label: Some("jaro matrix encoder") },
             );
 
-            let workgroups_x = (cols as u32 + 15) / 16;
-            let workgroups_y = (rows as u32 + 15) / 16;
+            let workgroups_x = (cols as u32).div_ceil(16);
+            let workgroups_y = (rows as u32).div_ceil(16);
 
             {
                 let mut pass = encoder.begin_compute_pass(
@@ -679,7 +679,7 @@ pub mod gpu_ext {
                 pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
             }
 
-            encoder.copy_buffer_to_buffer(&buf_matrix, 0, &buf_staging, 0, matrix_size);
+            encoder.copy_buffer_to_buffer(buf_matrix, 0, buf_staging, 0, matrix_size);
             self.engine.submit(encoder);
 
             let slice = buf_staging.slice(..);
@@ -910,7 +910,7 @@ pub mod gpu_ext {
                 let mut encoder = self.kernel.engine.device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("jaro batch encoder") },
                 );
-                let workgroups = (chunk + 63) / 64;
+                let workgroups = chunk.div_ceil(64);
                 {
                     let mut pass = encoder.begin_compute_pass(
                         &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
@@ -920,7 +920,7 @@ pub mod gpu_ext {
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
                 let bytes = self.kernel.engine.readback(encoder, &pool, chunk_bytes)?;
                 raw.extend_from_slice(bytemuck::cast_slice(&bytes));
 

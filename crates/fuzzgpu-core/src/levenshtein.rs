@@ -507,7 +507,7 @@ pub mod gpu_ext {
                 let mut encoder = self.engine.device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("levenshtein encoder") },
                 );
-                let workgroups = (chunk + 63) / 64;
+                let workgroups = chunk.div_ceil(64);
                 {
                     let mut pass = encoder.begin_compute_pass(
                         &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
@@ -518,7 +518,7 @@ pub mod gpu_ext {
                 }
 
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, buf_staging, 0, chunk_bytes);
                 let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
                 let flat: &[u32] = bytemuck::cast_slice(&bytes);
                 gpu_results.extend_from_slice(&flat[..chunk as usize]);
@@ -629,7 +629,7 @@ pub mod gpu_ext {
             let mut encoder = self.engine.device.create_command_encoder(
                 &wgpu::CommandEncoderDescriptor { label: Some("levenshtein short encoder") },
             );
-            let workgroups = (batch_size + 63) / 64;
+            let workgroups = batch_size.div_ceil(64);
             {
                 let mut pass = encoder.begin_compute_pass(
                     &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
@@ -639,7 +639,7 @@ pub mod gpu_ext {
                 pass.dispatch_workgroups(workgroups, 1, 1);
             }
 
-            encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, results_size);
+            encoder.copy_buffer_to_buffer(buf_results, 0, pool.get(SLOT_STAGING), 0, results_size);
             let bytes = self.engine.readback(encoder, &pool, results_size)?;
             let flat: &[u32] = bytemuck::cast_slice(&bytes);
             Ok(flat.to_vec())
@@ -729,7 +729,7 @@ pub mod gpu_ext {
             let mut encoder = self.engine.device.create_command_encoder(
                 &wgpu::CommandEncoderDescriptor { label: Some("levenshtein myers encoder") },
             );
-            let workgroups = (batch_size + 63) / 64;
+            let workgroups = batch_size.div_ceil(64);
             {
                 let mut pass = encoder.begin_compute_pass(
                     &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
@@ -739,7 +739,7 @@ pub mod gpu_ext {
                 pass.dispatch_workgroups(workgroups, 1, 1);
             }
 
-            encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, results_size);
+            encoder.copy_buffer_to_buffer(buf_results, 0, pool.get(SLOT_STAGING), 0, results_size);
             let bytes = self.engine.readback(encoder, &pool, results_size)?;
             let flat: &[u32] = bytemuck::cast_slice(&bytes);
             Ok(flat.to_vec())
@@ -853,8 +853,8 @@ pub mod gpu_ext {
             );
 
             // 2D dispatch: workgroups across cols (x) and rows (y)
-            let workgroups_x = (cols as u32 + 15) / 16;
-            let workgroups_y = (rows as u32 + 15) / 16;
+            let workgroups_x = (cols as u32).div_ceil(16);
+            let workgroups_y = (rows as u32).div_ceil(16);
 
             {
                 let mut pass = encoder.begin_compute_pass(
@@ -865,7 +865,7 @@ pub mod gpu_ext {
                 pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
             }
 
-            encoder.copy_buffer_to_buffer(&buf_matrix, 0, &buf_staging, 0, matrix_size);
+            encoder.copy_buffer_to_buffer(buf_matrix, 0, buf_staging, 0, matrix_size);
             self.engine.submit(encoder);
 
             let slice = buf_staging.slice(..);
@@ -1000,9 +1000,9 @@ pub mod gpu_ext {
                 // Copy only this chunk's rows back.
                 let chunk_bytes = (chunk_rows as usize * cols * 4) as u64;
                 encoder.copy_buffer_to_buffer(
-                    &buf_matrix,
+                    buf_matrix,
                     dispatched as u64 * cols as u64 * 4,
-                    &buf_staging,
+                    buf_staging,
                     0,
                     chunk_bytes,
                 );
@@ -1215,7 +1215,7 @@ pub mod gpu_ext {
                 let mut encoder = self.kernel.engine.device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("levenshtein batch encoder") },
                 );
-                let workgroups = (chunk + 63) / 64;
+                let workgroups = chunk.div_ceil(64);
                 {
                     let mut pass = encoder.begin_compute_pass(
                         &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
@@ -1225,7 +1225,7 @@ pub mod gpu_ext {
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
                 let bytes = self.kernel.engine.readback(encoder, &pool, chunk_bytes)?;
                 flat.extend_from_slice(bytemuck::cast_slice(&bytes));
 

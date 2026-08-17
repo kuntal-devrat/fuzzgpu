@@ -267,7 +267,7 @@ pub fn extract_one(query: &str, choices: &[&str], score_cutoff: f64) -> Option<(
     for (i, c) in choices.iter().enumerate() {
         let score = ratio(query, c);
         if score >= score_cutoff {
-            let is_better = best.as_ref().map_or(true, |(_, bs, _)| score > *bs);
+            let is_better = best.as_ref().is_none_or(|(_, bs, _)| score > *bs);
             if is_better {
                 // Update best before the early-exit check so an exact match
                 // at index i is always returned rather than an earlier non-exact.

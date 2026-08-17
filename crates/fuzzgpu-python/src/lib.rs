@@ -846,9 +846,7 @@ fn hardware_info() -> String {
     #[cfg(feature = "gpu")]
     {
         if GpuEngine::is_cpu_only() {
-            return format!(
-                "CPU-only fallback mode (GPU dispatch threshold: N/A, last routing: CPU)"
-            );
+            return "CPU-only fallback mode (GPU dispatch threshold: N/A, last routing: CPU)".to_string();
         }
         match GpuEngine::get() {
             Ok(engine) => {

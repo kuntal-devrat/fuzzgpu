@@ -465,7 +465,7 @@ pub mod gpu_ext {
                 let mut encoder = self.engine.device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("affine enc") },
                 );
-                let workgroups = (chunk + 15) / 16;
+                let workgroups = chunk.div_ceil(16);
                 {
                     let mut pass = encoder.begin_compute_pass(
                         &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
@@ -475,7 +475,7 @@ pub mod gpu_ext {
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, buf_staging, 0, chunk_bytes);
                 let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
                 gpu_results.extend_from_slice(bytemuck::cast_slice(&bytes));
 
@@ -615,7 +615,7 @@ pub mod gpu_ext {
                     pass.set_bind_group(0, &bg, &[]);
                     pass.dispatch_workgroups(chunk, 1, 1);
                 }
-                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, results_size);
+                encoder.copy_buffer_to_buffer(buf_results, 0, pool.get(SLOT_STAGING), 0, results_size);
                 let bytes = self.engine.readback(encoder, &pool, results_size)?;
                 let flat: &[f32] = bytemuck::cast_slice(&bytes);
                 out.extend_from_slice(&flat[..chunk as usize]);
@@ -862,7 +862,7 @@ pub mod gpu_ext {
                 let mut encoder = self.kernel.engine.device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("needleman batch encoder") },
                 );
-                let workgroups = (chunk + 15) / 16;
+                let workgroups = chunk.div_ceil(16);
                 {
                     let mut pass = encoder.begin_compute_pass(
                         &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
@@ -872,7 +872,7 @@ pub mod gpu_ext {
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
                 let bytes = self.kernel.engine.readback(encoder, &pool, chunk_bytes)?;
                 raw.extend_from_slice(bytemuck::cast_slice(&bytes));
 
