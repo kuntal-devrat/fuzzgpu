@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Standard Indel / Levenshtein (substitution cost = 2) edit distance used for fuzzy ratios.
 /// Supports both ASCII fast-path and full Unicode characters.
@@ -50,160 +50,538 @@ fn indel_distance_slice<T: PartialEq>(a: &[T], b: &[T]) -> u32 {
 
 /// Similarity ratio 0.0–100.0 using the standard 2*M / (|a| + |b|) Sørensen–Dice Levenshtein coefficient.
 ///
-/// Formula: `(|a| + |b| - indel_distance) / (|a| + |b|) × 100`
+/// Formula: `(1 - indel_distance / (|a| + |b|)) × 100` — evaluated in exactly
+/// rapidfuzz's order (`indel_normalized_similarity * 100`) for bit-identical
+/// floats.
 ///
 /// Matches RapidFuzz and FuzzyWuzzy identically across all ASCII and multi-byte Unicode test cases.
 pub fn ratio(s1: &str, s2: &str) -> f64 {
+    ratio_with_cutoff(s1, s2, 0.0)
+}
+
+/// `ratio` with rapidfuzz's cutoff semantics: returns 0.0 when the score is
+/// below `score_cutoff`, otherwise the raw score.
+pub fn ratio_with_cutoff(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
     let len_a = if s1.is_ascii() { s1.len() } else { s1.chars().count() };
     let len_b = if s2.is_ascii() { s2.len() } else { s2.chars().count() };
     let total = len_a + len_b;
-    if total == 0 { return 100.0; }
-    let dist = indel_distance(s1, s2) as f64;
-    ((total as f64 - dist) / total as f64) * 100.0
-}
-
-/// Partial ratio: best ratio of the shorter string against all substrings
-/// of approximately the same length in the longer string.
-///
-/// This handles cases where one string is a substring of another, e.g.,
-/// `partial_ratio("hello", "oh hello there")` returns a high score.
-pub fn partial_ratio(s1: &str, s2: &str) -> f64 {
-    partial_ratio_alignment(s1, s2).0
-}
-
-/// Partial ratio with alignment: returns `(score, src_start, dest_start, len)`
-/// where `src_start` is the char offset in the shorter string (always 0),
-/// `dest_start` is the char offset in the longer string where the best window
-/// starts, and `len` is the window length in chars.
-///
-/// This matches the rapidfuzz `partial_ratio_alignment` API.
-pub fn partial_ratio_alignment(s1: &str, s2: &str) -> (f64, usize, usize, usize) {
-    if s1.is_empty() || s2.is_empty() {
-        return (0.0, 0, 0, 0);
-    }
-
-    let s1_count = if s1.is_ascii() { s1.len() } else { s1.chars().count() };
-    let s2_count = if s2.is_ascii() { s2.len() } else { s2.chars().count() };
-
-    // Normalise: shorter is always the "source" (pattern).
-    let (shorter, longer, short_chars, long_chars, swapped) = if s1_count <= s2_count {
-        (s1, s2, s1_count, s2_count, false)
+    let score = if total == 0 {
+        100.0
     } else {
-        (s2, s1, s2_count, s1_count, true)
+        let dist = indel_distance(s1, s2) as f64;
+        (1.0 - dist / total as f64) * 100.0
     };
+    if score >= score_cutoff { score } else { 0.0 }
+}
 
-    if short_chars == long_chars {
-        let score = ratio(shorter, longer);
-        return (score, 0, 0, short_chars);
-    }
-
-    let mut best_score = 0.0f64;
-    let mut best_start = 0usize; // char offset in `longer`
-
-    if shorter.is_ascii() && longer.is_ascii() {
-        let short_bytes = shorter.as_bytes();
-        for start in 0..=(long_chars - short_chars) {
-            let window = &longer[start..start + short_bytes.len()];
-            let score = ratio(shorter, window);
-            if score > best_score {
-                best_score = score;
-                best_start = start;
-            }
-            if best_score == 100.0 { break; }
-        }
+/// rapidfuzz `norm_distance`: similarity from an edit distance normalized by
+/// the length sum, with cutoff semantics (0 when below cutoff).
+#[inline]
+fn norm_distance(dist: usize, lensum: usize, score_cutoff: f64) -> f64 {
+    let score = if lensum > 0 {
+        100.0 - 100.0 * dist as f64 / lensum as f64
     } else {
-        let longer_chars: Vec<char> = longer.chars().collect();
-        for start in 0..=(long_chars - short_chars) {
-            let window: String = longer_chars[start..start + short_chars].iter().collect();
-            let score = ratio(shorter, &window);
-            if score > best_score {
-                best_score = score;
-                best_start = start;
+        100.0
+    };
+    if score >= score_cutoff { score } else { 0.0 }
+}
+
+/// rapidfuzz `score_cutoff_to_distance`: the maximum edit distance that can
+/// still meet the cutoff.
+#[inline]
+fn score_cutoff_to_distance(score_cutoff: f64, lensum: usize) -> usize {
+    (lensum as f64 * (1.0 - score_cutoff / 100.0)).ceil() as usize
+}
+
+/// Alignment result, rapidfuzz-compatible: `(score, src_start, src_end,
+/// dest_start, dest_end)` — identical field order to rapidfuzz's
+/// `ScoreAlignment`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Alignment {
+    pub score: f64,
+    pub src_start: usize,
+    pub src_end: usize,
+    pub dest_start: usize,
+    pub dest_end: usize,
+}
+
+/// `ratio` over slices with cutoff semantics (indel distance normalized by the
+/// length sum, like rapidfuzz's `indel_normalized_similarity`).
+fn ratio_slices_with_cutoff<T: PartialEq>(a: &[T], b: &[T], score_cutoff: f64) -> f64 {
+    let lensum = a.len() + b.len();
+    let score = if lensum == 0 {
+        100.0
+    } else {
+        let dist = indel_distance_slice(a, b) as f64;
+        (1.0 - dist / lensum as f64) * 100.0
+    };
+    if score >= score_cutoff { score } else { 0.0 }
+}
+
+/// Port of rapidfuzz's `partial_ratio_impl` (fuzz_impl.hpp): the branch-and-bound
+/// window search over the longer string plus the prefix/suffix search, with the
+/// char-set pruning and running-cutoff semantics exactly as rapidfuzz threads
+/// them.
+///
+/// Preconditions: `a.len() <= b.len()`, both non-empty. Returns
+/// `(score, dest_start, dest_end)`; `src` is always `0..a.len()`.
+fn partial_ratio_impl<T: PartialEq + Eq + std::hash::Hash + Copy>(
+    a: &[T],
+    b: &[T],
+    score_cutoff: f64,
+) -> (f64, usize, usize) {
+    let len1 = a.len();
+    let len2 = b.len();
+    let mut cutoff = score_cutoff;
+    let mut res_score = 0.0f64;
+    let mut dest_start = 0usize;
+    let mut dest_end = len1;
+
+    // Char-set of the (shorter) pattern; prefixes/suffixes whose boundary char
+    // is absent from it cannot beat the running best and are skipped — the
+    // exact pruning rapidfuzz applies.
+    let char_set: HashSet<T> = a.iter().copied().collect();
+
+    if len2 > len1 {
+        let maximum = len1 * 2;
+        // rapidfuzz `NormSim_to_NormDist(score_cutoff / 100)` — note the 1e-5
+        // imprecision term, which is load-bearing for the pruning bound.
+        let norm_cutoff_sim = (1.0 - cutoff / 100.0 + 0.00001).min(1.0);
+        let mut cutoff_dist = (maximum as f64 * norm_cutoff_sim).ceil() as usize;
+        let mut best_dist = usize::MAX;
+        let mut scores: Vec<usize> = vec![usize::MAX; len2 - len1];
+        let mut windows: Vec<(usize, usize)> = vec![(0, len2 - len1 - 1)];
+        let mut new_windows: Vec<(usize, usize)> = Vec::new();
+
+        while !windows.is_empty() {
+            for &(first, second) in windows.iter() {
+                if scores[first] == usize::MAX {
+                    scores[first] = indel_distance_slice(a, &b[first..first + len1]) as usize;
+                    if scores[first] < cutoff_dist {
+                        cutoff_dist = scores[first];
+                        best_dist = scores[first];
+                        dest_start = first;
+                        dest_end = first + len1;
+                        if best_dist == 0 {
+                            return (100.0, dest_start, dest_end);
+                        }
+                    }
+                }
+                if scores[second] == usize::MAX {
+                    scores[second] = indel_distance_slice(a, &b[second..second + len1]) as usize;
+                    if scores[second] < cutoff_dist {
+                        cutoff_dist = scores[second];
+                        best_dist = scores[second];
+                        dest_start = second;
+                        dest_end = second + len1;
+                        if best_dist == 0 {
+                            return (100.0, dest_start, dest_end);
+                        }
+                    }
+                }
+
+                let cell_diff = second - first;
+                if cell_diff == 1 {
+                    continue;
+                }
+
+                // Bound: no window strictly between `first` and `second` can
+                // beat the current best if the minimum possible distance in
+                // the range is already at/above cutoff_dist.
+                let known_edits = scores[first].abs_diff(scores[second]);
+                let max_score_improvement = ((cell_diff - known_edits / 2) / 2) * 2;
+                let min_score =
+                    scores[first].min(scores[second]) as i64 - max_score_improvement as i64;
+                if min_score < cutoff_dist as i64 {
+                    let center = cell_diff / 2;
+                    new_windows.push((first, first + center));
+                    new_windows.push((first + center, second));
+                }
             }
-            if best_score == 100.0 { break; }
+            std::mem::swap(&mut windows, &mut new_windows);
+            new_windows.clear();
+        }
+
+        let score = (1.0 - best_dist as f64 / maximum as f64) * 100.0;
+        if score >= cutoff {
+            cutoff = score;
+            res_score = score;
         }
     }
 
-    // If we swapped s1/s2, the "dest_start" is in s1 (the original longer).
-    // Callers that want alignment in the original coordinate space should
-    // swap src/dest back when `s1_count > s2_count`.
-    let _ = swapped; // alignment is always relative to the longer string
-    (best_score, 0, best_start, short_chars)
+    // Prefixes of b (length 1..len1), pruning when the boundary char is not in
+    // the pattern's char set (rapidfuzz-exact).
+    for i in 1..len1 {
+        if !char_set.contains(&b[i - 1]) {
+            continue;
+        }
+        let ls_ratio = ratio_slices_with_cutoff(a, &b[..i], cutoff);
+        if ls_ratio > res_score {
+            cutoff = ls_ratio;
+            res_score = ls_ratio;
+            dest_start = 0;
+            dest_end = i;
+            if res_score == 100.0 {
+                return (100.0, dest_start, dest_end);
+            }
+        }
+    }
+
+    // Suffixes of b (length len1 down to 1, i.e. starts len2-len1 .. len2-1),
+    // same pruning. The suffix of length len1 is the last full window.
+    for i in (len2 - len1)..len2 {
+        if !char_set.contains(&b[i]) {
+            continue;
+        }
+        let ls_ratio = ratio_slices_with_cutoff(a, &b[i..], cutoff);
+        if ls_ratio > res_score {
+            cutoff = ls_ratio;
+            res_score = ls_ratio;
+            dest_start = i;
+            dest_end = len2;
+            if res_score == 100.0 {
+                return (100.0, dest_start, dest_end);
+            }
+        }
+    }
+
+    (res_score, dest_start, dest_end)
 }
 
-/// Token sort ratio: sort tokens alphabetically, then compare.
-pub fn token_sort_ratio(s1: &str, s2: &str) -> f64 {
-    let mut t1: Vec<&str> = s1.split_whitespace().collect();
-    let mut t2: Vec<&str> = s2.split_whitespace().collect();
-    t1.sort_unstable();
-    t2.sort_unstable();
-    let s1_sorted = t1.join(" ");
-    let s2_sorted = t2.join(" ");
-    ratio(&s1_sorted, &s2_sorted)
+/// Partial ratio over slices, returning the full rapidfuzz-compatible
+/// alignment `(score, src_start, src_end, dest_start, dest_end)`.
+fn partial_ratio_alignment_slices<T: PartialEq + Eq + std::hash::Hash + Copy + Clone>(
+    a: &[T],
+    b: &[T],
+    score_cutoff: f64,
+) -> Alignment {
+    let len1 = a.len();
+    let len2 = b.len();
+
+    // Swap so the first argument is always the shorter string, then swap the
+    // alignment back (rapidfuzz: `src` is relative to the FIRST argument).
+    if len1 > len2 {
+        let r = partial_ratio_alignment_slices(b, a, score_cutoff);
+        return Alignment {
+            score: r.score,
+            src_start: r.dest_start,
+            src_end: r.dest_end,
+            dest_start: r.src_start,
+            dest_end: r.src_end,
+        };
+    }
+
+    if score_cutoff > 100.0 {
+        return Alignment { score: 0.0, src_start: 0, src_end: len1, dest_start: 0, dest_end: len1 };
+    }
+    if len1 == 0 || len2 == 0 {
+        let score = if len1 == len2 { 100.0 } else { 0.0 };
+        return Alignment { score, src_start: 0, src_end: len1, dest_start: 0, dest_end: len1 };
+    }
+
+    let (score, ds, de) = partial_ratio_impl(a, b, score_cutoff);
+    let mut alignment = Alignment { score, src_start: 0, src_end: len1, dest_start: ds, dest_end: de };
+
+    // Equal-length second pass in the other direction (rapidfuzz-exact: the
+    // reverse-direction search can find a better window/prefix/suffix match).
+    if alignment.score != 100.0 && len1 == len2 {
+        let c = score_cutoff.max(alignment.score);
+        let (score2, ds2, de2) = partial_ratio_impl(b, a, c);
+        if score2 > alignment.score {
+            alignment = Alignment {
+                score: score2,
+                src_start: ds2,
+                src_end: de2,
+                dest_start: 0,
+                dest_end: len1,
+            };
+        }
+    }
+
+    alignment
 }
 
-/// Token set ratio: compare unique token sets.
-///
-/// Uses `BTreeSet` for deterministic sorted order without a separate sort step.
-/// Uses `Cow<str>` to avoid allocating intermediate `String`s when the
-/// intersection or difference is empty.
-pub fn token_set_ratio(s1: &str, s2: &str) -> f64 {
-    let t1: BTreeSet<&str> = s1.split_whitespace().collect();
-    let t2: BTreeSet<&str> = s2.split_whitespace().collect();
+/// Partial ratio: best ratio of the shorter string against all windows of the
+/// longer string of length len(shorter), plus all its prefixes (1..len-1) and
+/// suffixes (1..len) — the exact rapidfuzz algorithm (branch-and-bound window
+/// search + prefix/suffix search with char-set pruning and running cutoffs).
+pub fn partial_ratio_alignment(s1: &str, s2: &str, score_cutoff: f64) -> Alignment {
+    if s1.is_ascii() && s2.is_ascii() {
+        partial_ratio_alignment_slices(s1.as_bytes(), s2.as_bytes(), score_cutoff)
+    } else {
+        let a: Vec<char> = s1.chars().collect();
+        let b: Vec<char> = s2.chars().collect();
+        partial_ratio_alignment_slices(&a, &b, score_cutoff)
+    }
+}
 
-    let inter: Vec<&str> = t1.intersection(&t2).copied().collect();
-    let diff1: Vec<&str> = t1.difference(&t2).copied().collect();
-    let diff2: Vec<&str> = t2.difference(&t1).copied().collect();
+/// Partial ratio with rapidfuzz's cutoff semantics.
+pub fn partial_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    partial_ratio_alignment(s1, s2, score_cutoff).score
+}
 
-    // If both strings have identical token sets
-    if diff1.is_empty() && diff2.is_empty() {
+/// Split on whitespace and sort lexicographically (rapidfuzz `sorted_split`).
+fn sorted_split(s: &str) -> Vec<&str> {
+    let mut tokens: Vec<&str> = s.split_whitespace().collect();
+    tokens.sort_unstable();
+    tokens
+}
+
+/// Sorted unique-token set decomposition (rapidfuzz `set_decomposition`).
+struct SetDecomposition<'a> {
+    intersection: Vec<&'a str>,
+    diff_ab: Vec<&'a str>,
+    diff_ba: Vec<&'a str>,
+}
+
+fn set_decomposition<'a>(tokens_a: &'a [&'a str], tokens_b: &'a [&'a str]) -> SetDecomposition<'a> {
+    let set_a: BTreeSet<&str> = tokens_a.iter().copied().collect();
+    let set_b: BTreeSet<&str> = tokens_b.iter().copied().collect();
+    SetDecomposition {
+        intersection: set_a.intersection(&set_b).copied().collect(),
+        diff_ab: set_a.difference(&set_b).copied().collect(),
+        diff_ba: set_b.difference(&set_a).copied().collect(),
+    }
+}
+
+/// Total char length of the intersection tokens as joined with separators —
+/// rapidfuzz's `SplittedSentenceView::length()` includes the whitespace
+/// between words (`sum(word lengths) + (word_count - 1)`).
+fn intersection_len(intersection: &[&str]) -> usize {
+    if intersection.is_empty() {
+        return 0;
+    }
+    let word_len: usize = intersection.iter().map(|t| t.chars().count()).sum();
+    word_len + intersection.len() - 1
+}
+
+/// rapidfuzz `token_set_ratio` over token lists (fuzz_impl.hpp): empty token
+/// sets score 0 (FuzzyWuzzy compatibility), a non-empty intersection with one
+/// empty difference scores 100, otherwise a norm_distance over the joined
+/// differences plus the section ratios.
+fn token_set_ratio_inner(tokens_a: &[&str], tokens_b: &[&str], score_cutoff: f64) -> f64 {
+    if tokens_a.is_empty() || tokens_b.is_empty() {
+        return 0.0;
+    }
+
+    let decomp = set_decomposition(tokens_a, tokens_b);
+    let (intersect, diff_ab, diff_ba) = (&decomp.intersection, &decomp.diff_ab, &decomp.diff_ba);
+
+    // One sentence is part of the other one.
+    if !intersect.is_empty() && (diff_ab.is_empty() || diff_ba.is_empty()) {
         return 100.0;
     }
 
-    // Build sorted-token strings with pre-sized buffers to avoid realloc.
-    let inter_str: std::borrow::Cow<'_, str> = if inter.is_empty() {
-        std::borrow::Cow::Borrowed("")
-    } else {
-        std::borrow::Cow::Owned(inter.join(" "))
-    };
+    let diff_ab_joined = diff_ab.join(" ");
+    let diff_ba_joined = diff_ba.join(" ");
 
-    let t1_str: std::borrow::Cow<'_, str> = if diff1.is_empty() {
-        inter_str.clone()
-    } else if inter_str.is_empty() {
-        std::borrow::Cow::Owned(diff1.join(" "))
-    } else {
-        let mut s = String::with_capacity(inter_str.len() + 1 + diff1.iter().map(|w| w.len() + 1).sum::<usize>());
-        s.push_str(&inter_str);
-        s.push(' ');
-        s.push_str(&diff1.join(" "));
-        std::borrow::Cow::Owned(s)
-    };
+    let ab_len = diff_ab_joined.chars().count();
+    let ba_len = diff_ba_joined.chars().count();
+    let sect_len = intersection_len(intersect);
 
-    let t2_str: std::borrow::Cow<'_, str> = if diff2.is_empty() {
-        inter_str.clone()
-    } else if inter_str.is_empty() {
-        std::borrow::Cow::Owned(diff2.join(" "))
-    } else {
-        let mut s = String::with_capacity(inter_str.len() + 1 + diff2.iter().map(|w| w.len() + 1).sum::<usize>());
-        s.push_str(&inter_str);
-        s.push(' ');
-        s.push_str(&diff2.join(" "));
-        std::borrow::Cow::Owned(s)
-    };
+    // String length sect+ab <-> sect and sect+ba <-> sect.
+    let sect_ab_len = sect_len + usize::from(sect_len > 0) + ab_len;
+    let sect_ba_len = sect_len + usize::from(sect_len > 0) + ba_len;
 
-    let r01 = ratio(&inter_str, &t1_str);
-    let r02 = ratio(&inter_str, &t2_str);
-    let r12 = ratio(&t1_str, &t2_str);
+    let mut result = 0.0;
+    let cutoff_distance = score_cutoff_to_distance(score_cutoff, sect_ab_len + sect_ba_len);
+    let dist = indel_distance(&diff_ab_joined, &diff_ba_joined) as usize;
+    if dist <= cutoff_distance {
+        result = norm_distance(dist, sect_ab_len + sect_ba_len, score_cutoff);
+    }
 
-    r01.max(r02).max(r12)
+    // Exit early since the other ratios are 0.
+    if sect_len == 0 {
+        return result;
+    }
+
+    // The intersection is shared verbatim, so the distance to the full
+    // "sect+ab"/"sect+ba" strings reduces to a length difference.
+    let sect_ab_dist = usize::from(sect_len > 0) + ab_len;
+    let sect_ab_ratio = norm_distance(sect_ab_dist, sect_len + sect_ab_len, score_cutoff);
+
+    let sect_ba_dist = usize::from(sect_len > 0) + ba_len;
+    let sect_ba_ratio = norm_distance(sect_ba_dist, sect_len + sect_ba_len, score_cutoff);
+
+    result.max(sect_ab_ratio).max(sect_ba_ratio)
 }
 
-/// WRatio: weighted combination of multiple scorers.
-pub fn wratio(s1: &str, s2: &str) -> f64 {
-    let r = ratio(s1, s2);
-    let tsr = token_sort_ratio(s1, s2);
-    let tsr2 = token_set_ratio(s1, s2);
-    r.max(tsr).max(tsr2)
+/// Token sort ratio: sort tokens alphabetically, then compare.
+pub fn token_sort_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    if score_cutoff > 100.0 {
+        return 0.0;
+    }
+    let t1 = sorted_split(s1);
+    let t2 = sorted_split(s2);
+    ratio_with_cutoff(&t1.join(" "), &t2.join(" "), score_cutoff)
+}
+
+/// Token set ratio (rapidfuzz-exact, including the FuzzyWuzzy-compatible 0 for
+/// empty token sets).
+pub fn token_set_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    if score_cutoff > 100.0 {
+        return 0.0;
+    }
+    let t1 = sorted_split(s1);
+    let t2 = sorted_split(s2);
+    token_set_ratio_inner(&t1, &t2, score_cutoff)
+}
+
+/// rapidfuzz `token_ratio`: max of the sorted-joined ratio and the token-set
+/// decomposition ratios (used by WRatio). Note: unlike `token_set_ratio` this
+/// has NO empty-input guard — rapidfuzz scores two empty strings 100 here.
+pub fn token_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    if score_cutoff > 100.0 {
+        return 0.0;
+    }
+    let t1 = sorted_split(s1);
+    let t2 = sorted_split(s2);
+
+    let decomp = set_decomposition(&t1, &t2);
+    let (intersect, diff_ab, diff_ba) = (&decomp.intersection, &decomp.diff_ab, &decomp.diff_ba);
+
+    if !intersect.is_empty() && (diff_ab.is_empty() || diff_ba.is_empty()) {
+        return 100.0;
+    }
+
+    let diff_ab_joined = diff_ab.join(" ");
+    let diff_ba_joined = diff_ba.join(" ");
+
+    let ab_len = diff_ab_joined.chars().count();
+    let ba_len = diff_ba_joined.chars().count();
+    let sect_len = intersection_len(intersect);
+
+    let mut result = ratio_with_cutoff(&t1.join(" "), &t2.join(" "), score_cutoff);
+
+    let sect_ab_len = sect_len + usize::from(sect_len > 0) + ab_len;
+    let sect_ba_len = sect_len + usize::from(sect_len > 0) + ba_len;
+
+    let cutoff_distance = score_cutoff_to_distance(score_cutoff, sect_ab_len + sect_ba_len);
+    let dist = indel_distance(&diff_ab_joined, &diff_ba_joined) as usize;
+    if dist <= cutoff_distance {
+        result = result.max(norm_distance(dist, sect_ab_len + sect_ba_len, score_cutoff));
+    }
+
+    if sect_len == 0 {
+        return result;
+    }
+
+    let sect_ab_dist = usize::from(sect_len > 0) + ab_len;
+    let sect_ab_ratio = norm_distance(sect_ab_dist, sect_len + sect_ab_len, score_cutoff);
+
+    let sect_ba_dist = usize::from(sect_len > 0) + ba_len;
+    let sect_ba_ratio = norm_distance(sect_ba_dist, sect_len + sect_ba_len, score_cutoff);
+
+    result.max(sect_ab_ratio).max(sect_ba_ratio)
+}
+
+/// Partial token sort ratio: sort tokens, then partial_ratio.
+pub fn partial_token_sort_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    if score_cutoff > 100.0 {
+        return 0.0;
+    }
+    let t1 = sorted_split(s1);
+    let t2 = sorted_split(s2);
+    partial_ratio(&t1.join(" "), &t2.join(" "), score_cutoff)
+}
+
+/// rapidfuzz `partial_token_ratio`: 100 when the token intersection is
+/// non-empty, otherwise partial_ratio of the joined token lists (and of the
+/// joined differences when they differ from the full lists). No empty-input
+/// guard (rapidfuzz: two empty strings score 100).
+pub fn partial_token_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    if score_cutoff > 100.0 {
+        return 0.0;
+    }
+    let t1 = sorted_split(s1);
+    let t2 = sorted_split(s2);
+
+    let decomp = set_decomposition(&t1, &t2);
+
+    // Exit early when there is a common word in both sequences.
+    if !decomp.intersection.is_empty() {
+        return 100.0;
+    }
+
+    let result = partial_ratio(&t1.join(" "), &t2.join(" "), score_cutoff);
+
+    // Do not calculate the same partial_ratio twice.
+    if t1.len() == decomp.diff_ab.len() && t2.len() == decomp.diff_ba.len() {
+        return result;
+    }
+
+    let c = score_cutoff.max(result);
+    result.max(partial_ratio(&decomp.diff_ab.join(" "), &decomp.diff_ba.join(" "), c))
+}
+
+/// Partial token set ratio (rapidfuzz-exact).
+pub fn partial_token_set_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    if score_cutoff > 100.0 {
+        return 0.0;
+    }
+    let t1 = sorted_split(s1);
+    let t2 = sorted_split(s2);
+    if t1.is_empty() || t2.is_empty() {
+        return 0.0;
+    }
+
+    let decomp = set_decomposition(&t1, &t2);
+
+    // Exit early when there is a common word in both sequences.
+    if !decomp.intersection.is_empty() {
+        return 100.0;
+    }
+
+    partial_ratio(&decomp.diff_ab.join(" "), &decomp.diff_ba.join(" "), score_cutoff)
+}
+
+/// WRatio: rapidfuzz's weighted combination — length-ratio-scaled partial
+/// ratios, token ratios, and partial token ratios (fuzz_impl.hpp, exact
+/// constants and cutoff threading).
+pub fn wratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    if score_cutoff > 100.0 {
+        return 0.0;
+    }
+
+    const UNBASE_SCALE: f64 = 0.95;
+
+    let len1 = s1.chars().count();
+    let len2 = s2.chars().count();
+
+    // FuzzyWuzzy compatibility: empty strings score 0.
+    if len1 == 0 || len2 == 0 {
+        return 0.0;
+    }
+
+    let len_ratio = if len1 > len2 {
+        len1 as f64 / len2 as f64
+    } else {
+        len2 as f64 / len1 as f64
+    };
+
+    let mut end_ratio = ratio_with_cutoff(s1, s2, score_cutoff);
+
+    if len_ratio < 1.5 {
+        let c = score_cutoff.max(end_ratio) / UNBASE_SCALE;
+        return end_ratio.max(token_ratio(s1, s2, c) * UNBASE_SCALE);
+    }
+
+    let partial_scale = if len_ratio <= 8.0 { 0.9 } else { 0.6 };
+
+    let c = score_cutoff.max(end_ratio) / partial_scale;
+    end_ratio = end_ratio.max(partial_ratio(s1, s2, c) * partial_scale);
+
+    let c = score_cutoff.max(end_ratio) / UNBASE_SCALE;
+    end_ratio.max(partial_token_ratio(s1, s2, c) * UNBASE_SCALE * partial_scale)
+}
+
+/// QRatio: rapidfuzz's quick ratio — 0 for empty inputs (FuzzyWuzzy
+/// compatibility), otherwise plain `ratio` with cutoff.
+pub fn qratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
+    if s1.is_empty() || s2.is_empty() {
+        return 0.0;
+    }
+    ratio_with_cutoff(s1, s2, score_cutoff)
 }
 
 /// Batch ratio: one query vs many candidates, parallelized with Rayon.
@@ -306,8 +684,112 @@ mod tests {
 
     #[test]
     fn test_partial_ratio() {
-        let r = partial_ratio("hello", "oh hello there");
+        let r = partial_ratio("hello", "oh hello there", 0.0);
         assert!(r >= 100.0 - 0.01, "Expected ~100.0, got {}", r);
+    }
+
+    #[test]
+    fn test_partial_ratio_empty() {
+        // rapidfuzz: both empty -> 100, exactly one empty -> 0.
+        assert_eq!(partial_ratio("", "", 0.0), 100.0);
+        assert_eq!(partial_ratio("abc", "", 0.0), 0.0);
+        assert_eq!(partial_ratio("", "abc", 0.0), 0.0);
+    }
+
+    #[test]
+    fn test_partial_ratio_prefix_suffix_search() {
+        // The suffix "opacg" of the second string wins (rapidfuzz: 40.0).
+        let r = partial_ratio("ctgdctopacg", "afqofpvaus", 0.0);
+        assert!((r - 40.0).abs() < 1e-9, "Expected 40.0, got {}", r);
+    }
+
+    #[test]
+    fn test_partial_ratio_alignment_fields() {
+        // Rapidfuzz-compatible 5-field shape: score, src_start, src_end,
+        // dest_start, dest_end.
+        let a = partial_ratio_alignment("hello", "oh hello there", 0.0);
+        assert_eq!(a.score, 100.0);
+        assert_eq!(a.src_start, 0);
+        assert_eq!(a.src_end, 5);
+        assert_eq!(a.dest_start, 3);
+        assert_eq!(a.dest_end, 8);
+    }
+
+    #[test]
+    fn test_partial_ratio_alignment_empty() {
+        let a = partial_ratio_alignment("", "", 0.0);
+        assert_eq!(a.score, 100.0);
+        assert_eq!((a.src_start, a.src_end, a.dest_start, a.dest_end), (0, 0, 0, 0));
+        let a = partial_ratio_alignment("abc", "", 0.0);
+        assert_eq!(a.score, 0.0);
+        assert_eq!((a.src_start, a.src_end, a.dest_start, a.dest_end), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_token_set_ratio_empty() {
+        // rapidfuzz FuzzyWuzzy compatibility: any empty token set -> 0.
+        assert_eq!(token_set_ratio("", "", 0.0), 0.0);
+        assert_eq!(token_set_ratio("abc", "", 0.0), 0.0);
+        assert_eq!(token_set_ratio("", "abc", 0.0), 0.0);
+    }
+
+    #[test]
+    fn test_token_set_ratio_contained() {
+        // One token set contained in the other -> 100.
+        assert_eq!(token_set_ratio("hello", "hello world", 0.0), 100.0);
+    }
+
+    #[test]
+    fn test_qratio_empty() {
+        assert_eq!(qratio("", "", 0.0), 0.0);
+        assert_eq!(qratio("abc", "", 0.0), 0.0);
+        assert_eq!(qratio("", "abc", 0.0), 0.0);
+        assert!((qratio("hello", "hallo", 0.0) - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_wratio_empty() {
+        assert_eq!(wratio("", "", 0.0), 0.0);
+        assert_eq!(wratio("abc", "", 0.0), 0.0);
+    }
+
+    #[test]
+    fn test_wratio_example() {
+        // Verified against rapidfuzz 3.14: ('ctgdctopacg', 'ncb') -> 45.0.
+        let r = wratio("ctgdctopacg", "ncb", 0.0);
+        assert!((r - 45.0).abs() < 1e-9, "Expected 45.0, got {}", r);
+    }
+
+    #[test]
+    fn test_partial_token_set_ratio_common_word() {
+        // Non-empty intersection -> 100 (rapidfuzz).
+        assert_eq!(partial_token_set_ratio("hello world", "hello there", 0.0), 100.0);
+    }
+
+    #[test]
+    fn test_dbg_token_set_components() {
+        let s1 = "The quick brown fox jumps over the lazy dog";
+        let s2 = "A quick brown fox jumps over the lazy dog!";
+        let t1 = sorted_split(s1);
+        let t2 = sorted_split(s2);
+        let d = set_decomposition(&t1, &t2);
+        println!("t1={:?}", t1);
+        println!("t2={:?}", t2);
+        println!("inter={:?} diff_ab={:?} diff_ba={:?}", d.intersection, d.diff_ab, d.diff_ba);
+        let ab = d.diff_ab.join(" ");
+        let ba = d.diff_ba.join(" ");
+        println!("ab='{}'({}) ba='{}'({})", ab, ab.chars().count(), ba, ba.chars().count());
+        println!("sect_len(no sep)={}", intersection_len(&d.intersection));
+        println!("indel={}", indel_distance(&ab, &ba));
+        let s1b = "new york mets";
+        let s2b = "new york yankees";
+        let u1 = sorted_split(s1b);
+        let u2 = sorted_split(s2b);
+        let e = set_decomposition(&u1, &u2);
+        println!("mets: inter={:?} diff_ab={:?} diff_ba={:?}", e.intersection, e.diff_ab, e.diff_ba);
+        let mab = e.diff_ab.join(" ");
+        let mba = e.diff_ba.join(" ");
+        println!("mets: ab='{}'({}) ba='{}'({}) sect_len={} indel={}", mab, mab.chars().count(), mba, mba.chars().count(), intersection_len(&e.intersection), indel_distance(&mab, &mba));
     }
 
     #[test]

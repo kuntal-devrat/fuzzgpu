@@ -688,7 +688,7 @@ pub fn jaro_bitpar(a: &[u8], b: &[u8]) -> f64 {
 
     (matches as f64 / m as f64
         + matches as f64 / n as f64
-        + (matches as f64 - transpositions as f64 / 2.0) / matches as f64)
+        + (matches as f64 - (transpositions / 2) as f64) / matches as f64)
         / 3.0
 }
 
@@ -955,7 +955,7 @@ fn jaro_score_from_masks(a: &[u8], b: &[u8], matched_a: u64, matched_b: u64, mat
     let mf = m as f64;
     let nf = n as f64;
     let mat = matches as f64;
-    (mat / mf + mat / nf + (mat - transpositions as f64 / 2.0) / mat) / 3.0
+    (mat / mf + mat / nf + (mat - (transpositions / 2) as f64) / mat) / 3.0
 }
 
 /// AVX2 implementation of [`jaro_4way`].
@@ -1172,7 +1172,7 @@ fn jaro_inner_slice(a: &[u8], b: &[u8], a_matches: &mut [bool], b_matches: &mut 
 
     (matches as f64 / m as f64
         + matches as f64 / n as f64
-        + (matches as f64 - transpositions as f64 / 2.0) / matches as f64) / 3.0
+        + (matches as f64 - (transpositions / 2) as f64) / matches as f64) / 3.0
 }
 
 #[cfg(test)]

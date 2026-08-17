@@ -8,7 +8,7 @@
 
 *Cross-platform GPU compute via WebGPU (`wgpu`) & Multi-Core CPU parallelism with Rayon. Zero CUDA dependencies.*
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.5-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.6-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg?style=flat-square)](https://www.rust-lang.org)
 [![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
@@ -31,7 +31,34 @@ No NVIDIA CUDA drivers or complex toolkits required.
 
 ---
 
-## What's New in v0.1.5
+## What's New in v0.1.6
+
+### Drop-in rapidfuzz parity (Python)
+The full Python layer is now byte-identical to rapidfuzz 3.14.5 over a 169,744-pair differential harness across `ratio`, `partial_ratio`, `token_sort_ratio`, `token_set_ratio`, `token_ratio`, `WRatio`, `QRatio`, `partial_token_*`, `jaro`, `jaro_winkler`, `levenshtein`, `indel`, `hamming`, `osa` — **0 mismatches**.
+
+### Bug fixes (Rust core, float parity)
+- **`ratio` / `partial_ratio` cutoff imprecision** — port of rapidfuzz's load-bearing `NormSim_to_NormDist = min(1, 1 - cutoff/100 + 1e-5)` term. Without it, the branch-and-bound would silently reject ties at exact cutoffs (e.g. `partial_ratio("park", "ba", score_cutoff=50.0)` returned `0` instead of `50`).
+- **`ratio` score formula** — switched from `((len-dist)/len)*100` to `(1 - dist/len)*100` to match rapidfuzz C++'s exact ulp order (`indel_normalized_similarity * 100`).
+
+### New features (Python distance layer)
+- **`Editops` / `Opcodes` / `Editop` / `Opcode` / `MatchingBlock` / `ScoreAlignment`** classes (rapidfuzz-compatible list-/tuple-likes with `as_list`, `as_opcodes`, `as_editops`, `as_matching_blocks`, `apply`, `inverse`, `remove_subsequence`, `from_*`).
+- **`Levenshtein.editops` / `.opcodes`** — exact Myers bit-parallel port with `common_affix` (suffix measured on post-prefix slice, matching rapidfuzz).
+- **`LCSseq`** module — Myers LCS bit-parallel matrix + editops/opcodes (delete-checked-first traceback).
+- **`Prefix`** and **`Postfix`** modules with the C++ `1 - dist/maximum` ulp order.
+- **`Hamming.editops` / `.opcodes`** — replace-per-mismatch + padding delete/insert model.
+- **`Indel.editops` / `.opcodes`** — delegates to `LCSseq` (matching rapidfuzz C++).
+- **`fuzz.partial_ratio_alignment`** now returns `ScoreAlignment(score, src_start, src_end, dest_start, dest_end)` — drop-in compatible with rapidfuzz.
+- **`process.extract` / `extractOne` / `cdist`** default to `WRatio` (matches rapidfuzz 3.14.5).
+- **`token_ratio` / `partial_token_ratio`** exposed at top level (`fuzzgpu.token_ratio`, `fuzzgpu.partial_token_ratio`).
+- All alignment types re-exported at the package root (`fuzzgpu.Editop`, `fuzzgpu.Editops`, etc.).
+
+### Type stubs
+- `__init__.pyi`, `fuzz.pyi`, `process.pyi`, `distance/__init__.pyi` updated for the new APIs.
+
+---
+
+<details>
+<summary><b>Previous (v0.1.5</b</summary>
 
 ### Bug fixes
 - **Damerau-Levenshtein safety gate** now fires in release builds (`assert!` not `debug_assert!`) — non-ASCII inputs no longer silently produce wrong distances in production wheels
@@ -53,12 +80,14 @@ No NVIDIA CUDA drivers or complex toolkits required.
 - `editops` and `opcodes` re-exported at the top level (`fuzzgpu.editops`, `fuzzgpu.opcodes`)
 - Complete type stubs (`__init__.pyi`, `fuzz.pyi`, `process.pyi`)
 
+</details>
+
 ---
 
 ## Benchmark Results
 
 *Hardware: Intel(R) Iris(R) Xe Graphics (Vulkan) + Intel Core i7 (Rayon uses all cores)*
-*Versions: fuzzgpu 0.1.5 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
+*Versions: fuzzgpu 0.1.6 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
 *Median of 7 runs after warmup. Reproduce: `python benchmarks/bench_compare.py`*
 
 ### Levenshtein Batch (1 query × N candidates, 10-char strings)
@@ -89,7 +118,7 @@ pip install fuzzgpu
 ```toml
 # Rust
 [dependencies]
-fuzzgpu-core = "0.1.5"
+fuzzgpu-core = "0.1.6"
 ```
 
 ---
@@ -151,7 +180,7 @@ codes = fuzzgpu.opcodes("kitten", "sitting")
 # ── Search ────────────────────────────────────────────────────────────────────
 from fuzzgpu.fuzz import extract, extractOne
 best  = extractOne("hellp", ["hello", "world", "help"], score_cutoff=50.0)
-# ("hello", 80.0, 0)
+# ("help", 88.88888888888889, 2)
 top_3 = extract("apple", ["apply", "ape", "banana", "applesauce"],
                 score_cutoff=50.0, limit=3)
 
@@ -185,8 +214,8 @@ fuzzgpu.set_cpu_only(True)       # force CPU-only mode
 
 ```toml
 [dependencies]
-fuzzgpu-core = "0.1.5"                                        # GPU + CPU fallback
-# fuzzgpu-core = { version = "0.1.5", default-features = false } # CPU-only
+fuzzgpu-core = "0.1.6"                                        # GPU + CPU fallback
+# fuzzgpu-core = { version = "0.1.6", default-features = false } # CPU-only
 ```
 
 ```rust

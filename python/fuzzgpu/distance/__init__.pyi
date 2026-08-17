@@ -1,5 +1,14 @@
-"""rapidfuzz.distance-compatible metrics."""
+"""Type stubs for fuzzgpu.distance rapidfuzz-compatible submodule."""
+from __future__ import annotations
 
+from ._common import (
+    Editop,
+    Editops,
+    Opcode,
+    Opcodes,
+    MatchingBlock,
+    ScoreAlignment,
+)
 from . import (
     Levenshtein,
     DamerauLevenshtein,
@@ -12,7 +21,6 @@ from . import (
     Prefix,
     Postfix,
 )
-from ._common import Editop, Editops, Opcode, Opcodes, MatchingBlock, ScoreAlignment
 
 __all__ = [
     "Levenshtein",

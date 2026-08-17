@@ -72,12 +72,12 @@ class TestEmptyAndSingleCharInputs:
         assert fuzz.ratio("", "") == 100.0
         assert fuzz.ratio("abc", "") == 0.0
         assert fuzz.ratio("", "abc") == 0.0
-        assert fuzz.partial_ratio("", "") == 0.0
+        assert fuzz.partial_ratio("", "") == 100.0
         assert fuzz.partial_ratio("abc", "") == 0.0
         assert fuzz.partial_ratio("", "abc") == 0.0
         assert fuzz.token_sort_ratio("", "") == 100.0
-        assert fuzz.token_set_ratio("", "") == 100.0
-        assert fuzz.WRatio("", "") == 100.0
+        assert fuzz.token_set_ratio("", "") == 0.0
+        assert fuzz.WRatio("", "") == 0.0
 
     def test_extract_empty_choices(self):
         assert fuzz.extract("query", [], score_cutoff=0.0, limit=10) == []

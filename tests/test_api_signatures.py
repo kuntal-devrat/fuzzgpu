@@ -129,7 +129,7 @@ class TestKeywordAndPositionalArgs:
         assert fuzzgpu.partial_ratio(a="apple", b="apple pie") == 100.0
         assert fuzzgpu.token_sort_ratio(a="apple banana", b="banana apple") == 100.0
         assert fuzzgpu.token_set_ratio(a="apple banana", b="apple banana orange") == 100.0
-        assert fuzzgpu.wratio(a="apple banana", b="banana apple") == 100.0
+        assert fuzzgpu.wratio(a="apple banana", b="banana apple") == 95.0
         r_batch = fuzzgpu.ratio_batch(query="apple", candidates=["apple", "aple"])
         assert r_batch[0] == 100.0
         assert abs(r_batch[1] - 88.88888888888889) < 0.01
