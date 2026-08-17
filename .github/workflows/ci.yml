@@ -38,7 +38,7 @@ jobs:
         run: cargo test --workspace --verbose
 
       - name: Install dependencies
-        run: pip install maturin pytest pytest-timeout
+        run: pip install maturin pytest pytest-timeout numpy
 
       - name: Build & install extension
         run: pip install .
@@ -171,8 +171,14 @@ jobs:
         run: |
           for i in $(seq 1 "${ITERATIONS}"); do
             echo "GPU suite iteration ${i}/${ITERATIONS}"
-            if ! cargo test -p fuzzgpu-core --lib gpu -- --test-threads=8 2>&1 | grep -q 'test result: ok'; then
+            OUTPUT=$(cargo test -p fuzzgpu-core --lib gpu -- --test-threads=8 2>&1)
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -q 'FAILED\|test result: FAILED'; then
               echo "FAILED at iteration ${i}/${ITERATIONS}"
+              exit 1
+            fi
+            if ! echo "$OUTPUT" | grep -qE 'test result: ok|0 failed'; then
+              echo "Could not confirm passing at iteration ${i}/${ITERATIONS}"
               exit 1
             fi
           done
