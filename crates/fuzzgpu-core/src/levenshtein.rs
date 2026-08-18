@@ -246,8 +246,12 @@ pub mod gpu_ext {
             if let Some(k) = GLOBAL_GPU_KERNEL.get() { return Ok(k); }
             let engine = GpuEngine::get()?;
             let kernel = Self::new_inner(engine)?;
+            // A concurrent caller may have won the race and set it already;
+            // either way `get()` now returns `Some` — no unwrap needed.
             let _ = GLOBAL_GPU_KERNEL.set(kernel);
-            Ok(GLOBAL_GPU_KERNEL.get().unwrap())
+            GLOBAL_GPU_KERNEL.get().ok_or_else(|| FuzzGpuError::NoDevice(
+                "Levenshtein kernel unexpectedly absent after init".into()
+            ))
         }
 
         fn new_inner(engine: std::sync::Arc<GpuEngine>) -> Result<Self> {
