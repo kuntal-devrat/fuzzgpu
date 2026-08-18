@@ -1,6 +1,11 @@
 """rapidfuzz.distance.Levenshtein-compatible module backed by fuzzgpu."""
 from .. import fuzzgpu as _native
-from ._common import cutoff_distance, normalized_distance as _normalized
+from ._common import (
+    Editop,
+    Editops,
+    cutoff_distance,
+    normalized_distance as _normalized,
+)
 
 
 def distance(s1, s2, *, weights=(1, 1, 1), processor=None, score_cutoff=None, score_hint=None):
@@ -51,61 +56,119 @@ def normalized_similarity(s1, s2, *, processor=None, score_cutoff=None, score_hi
 
 # ── Alignment helpers ─────────────────────────────────────────────────────────
 
-def _alignment(s1, s2):
-    """Return an optimal unit-cost alignment in O(len(s1) * len(s2))."""
-    rows, cols = len(s1), len(s2)
-    matrix = [list(range(cols + 1))] + [[i] + [0] * cols for i in range(1, rows + 1)]
-    for i, a in enumerate(s1, 1):
-        for j, b in enumerate(s2, 1):
-            matrix[i][j] = min(
-                matrix[i - 1][j] + 1,
-                matrix[i][j - 1] + 1,
-                matrix[i - 1][j - 1] + (a != b),
-            )
-    steps = []
-    i, j = rows, cols
-    while i or j:
-        if i and j and matrix[i][j] == matrix[i - 1][j - 1] + (s1[i - 1] != s2[j - 1]):
-            tag = "equal" if s1[i - 1] == s2[j - 1] else "replace"
-            steps.append((tag, i - 1, i, j - 1, j))
-            i, j = i - 1, j - 1
-        elif i and matrix[i][j] == matrix[i - 1][j] + 1:
-            steps.append(("delete", i - 1, i, j, j))
-            i -= 1
-        else:
-            steps.append(("insert", i, i, j - 1, j))
-            j -= 1
-    steps.reverse()
-    return steps
+def _common_affix(s1, s2):
+    """Length of the common prefix and suffix of s1 and s2 (exact rapidfuzz
+    `common_affix`: the suffix is measured on the post-prefix strings)."""
+    prefix = 0
+    for ch1, ch2 in zip(s1, s2):
+        if ch1 != ch2:
+            break
+        prefix += 1
+    suffix = 0
+    for ch1, ch2 in zip(reversed(s1[prefix:]), reversed(s2[prefix:])):
+        if ch1 != ch2:
+            break
+        suffix += 1
+    return prefix, suffix
+
+
+def _matrix(s1, s2):
+    """Myers bit-parallel distance matrix (exact rapidfuzz port)."""
+    if not s1:
+        return (len(s2), [], [])
+
+    VP = (1 << len(s1)) - 1
+    VN = 0
+    currDist = len(s1)
+    mask = 1 << (len(s1) - 1)
+
+    block = {}
+    block_get = block.get
+    x = 1
+    for ch1 in s1:
+        block[ch1] = block_get(ch1, 0) | x
+        x <<= 1
+
+    matrix_VP = []
+    matrix_VN = []
+    for ch2 in s2:
+        # Step 1: Computing D0
+        PM_j = block_get(ch2, 0)
+        X = PM_j
+        D0 = (((X & VP) + VP) ^ VP) | X | VN
+        # Step 2: Computing HP and HN
+        HP = VN | ~(D0 | VP)
+        HN = D0 & VP
+        # Step 3: Computing the value D[m,j]
+        currDist += (HP & mask) != 0
+        currDist -= (HN & mask) != 0
+        # Step 4: Computing Vp and VN
+        HP = (HP << 1) | 1
+        HN = HN << 1
+        VP = HN | ~(D0 | HP)
+        VN = HP & D0
+
+        matrix_VP.append(VP)
+        matrix_VN.append(VN)
+
+    return (currDist, matrix_VP, matrix_VN)
 
 
 def editops(s1, s2, *, processor=None, score_hint=None):
-    """Return a list of (tag, src_pos, dest_pos) edit operations."""
+    """Return Editops describing how to turn s1 into s2."""
     del score_hint
     if processor:
         s1, s2 = processor(s1), processor(s2)
-    return [
-        (tag, i1, j1)
-        for tag, i1, _i2, j1, _j2 in _alignment(s1, s2)
-        if tag != "equal"
-    ]
+    prefix_len, suffix_len = _common_affix(s1, s2)
+    s1_mid = s1[prefix_len : len(s1) - suffix_len]
+    s2_mid = s2[prefix_len : len(s2) - suffix_len]
+    dist, VP, VN = _matrix(s1_mid, s2_mid)
+
+    editops = Editops([], 0, 0)
+    editops._src_len = len(s1_mid) + prefix_len + suffix_len
+    editops._dest_len = len(s2_mid) + prefix_len + suffix_len
+
+    if dist == 0:
+        return editops
+
+    editop_list = [None] * dist
+    col = len(s1_mid)
+    row = len(s2_mid)
+    while row != 0 and col != 0:
+        # deletion
+        if VP[row - 1] & (1 << (col - 1)):
+            dist -= 1
+            col -= 1
+            editop_list[dist] = Editop("delete", col + prefix_len, row + prefix_len)
+        else:
+            row -= 1
+
+            # insertion
+            if row and (VN[row - 1] & (1 << (col - 1))):
+                dist -= 1
+                editop_list[dist] = Editop("insert", col + prefix_len, row + prefix_len)
+            else:
+                col -= 1
+
+                # replace (Matches are not recorded)
+                if s1_mid[col] != s2_mid[row]:
+                    dist -= 1
+                    editop_list[dist] = Editop("replace", col + prefix_len, row + prefix_len)
+
+    while col != 0:
+        dist -= 1
+        col -= 1
+        editop_list[dist] = Editop("delete", col + prefix_len, row + prefix_len)
+
+    while row != 0:
+        dist -= 1
+        row -= 1
+        editop_list[dist] = Editop("insert", col + prefix_len, row + prefix_len)
+
+    editops._editops = editop_list
+    return editops
 
 
 def opcodes(s1, s2, *, processor=None, score_hint=None):
-    """Return a list of (tag, i1, i2, j1, j2) opcode blocks."""
-    del score_hint
-    if processor:
-        s1, s2 = processor(s1), processor(s2)
-    result = []
-    for tag, i1, i2, j1, j2 in _alignment(s1, s2):
-        if (
-            result
-            and result[-1][0] == tag
-            and result[-1][2] == i1
-            and result[-1][4] == j1
-        ):
-            old_tag, old_i1, _old_i2, old_j1, _old_j2 = result[-1]
-            result[-1] = (old_tag, old_i1, i2, old_j1, j2)
-        else:
-            result.append((tag, i1, i2, j1, j2))
-    return result
+    """Return Opcodes describing how to turn s1 into s2."""
+    return editops(s1, s2, processor=processor, score_hint=score_hint).as_opcodes()

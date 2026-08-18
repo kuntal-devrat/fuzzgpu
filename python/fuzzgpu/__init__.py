@@ -75,12 +75,14 @@ from fuzzgpu.fuzzgpu import (
     fuzz_partial_ratio_alignment,
     fuzz_token_sort_ratio,
     fuzz_token_set_ratio,
+    fuzz_token_ratio,
     fuzz_wratio,
     fuzz_ratio_batch,
     fuzz_extract,
     fuzz_extract_one,
     fuzz_partial_token_sort_ratio,
     fuzz_partial_token_set_ratio,
+    fuzz_partial_token_ratio,
     fuzz_qratio,
     # Optimized algorithm variants
     levenshtein_myers,
@@ -109,12 +111,14 @@ ratio = fuzz_ratio
 partial_ratio = fuzz_partial_ratio
 token_sort_ratio = fuzz_token_sort_ratio
 token_set_ratio = fuzz_token_set_ratio
+token_ratio = fuzz_token_ratio
 wratio = fuzz_wratio
 WRatio = fuzz_wratio
 QRatio = fuzz_qratio
 ratio_batch = fuzz_ratio_batch
 partial_token_sort_ratio = fuzz_partial_token_sort_ratio
 partial_token_set_ratio = fuzz_partial_token_set_ratio
+partial_token_ratio = fuzz_partial_token_ratio
 extract = fuzz_extract
 extractOne = fuzz_extract_one
 extract_one = fuzz_extract_one
@@ -127,11 +131,13 @@ from . import fuzz, process, distance
 # Prefer the richer compatibility signatures at the package root as well.
 ratio = fuzz.ratio
 partial_ratio = fuzz.partial_ratio
-partial_ratio_alignment = fuzz_partial_ratio_alignment
+partial_ratio_alignment = fuzz.partial_ratio_alignment
 token_sort_ratio = fuzz.token_sort_ratio
 token_set_ratio = fuzz.token_set_ratio
+token_ratio = fuzz.token_ratio
 partial_token_sort_ratio = fuzz.partial_token_sort_ratio
 partial_token_set_ratio = fuzz.partial_token_set_ratio
+partial_token_ratio = fuzz.partial_token_ratio
 wratio = WRatio = fuzz.WRatio
 QRatio = fuzz.QRatio
 extract = fuzz.extract
@@ -140,6 +146,16 @@ extract_one = extractOne = fuzz.extractOne
 # Levenshtein alignment helpers (live in distance.Levenshtein, also available
 # at the top level for drop-in rapidfuzz compatibility).
 from .distance.Levenshtein import editops, opcodes
+
+# rapidfuzz.distance-compatible alignment types at the package root.
+from .distance import (
+    Editop,
+    Editops,
+    Opcode,
+    Opcodes,
+    MatchingBlock,
+    ScoreAlignment,
+)
 
 __all__ = [
     # Core distance functions
@@ -154,9 +170,11 @@ __all__ = [
     "jaro_winkler_batch_into", "jaro_winkler_cdist", "jaro_winkler_cdist_into",
     # Fuzzy scorers
     "fuzz_ratio", "fuzz_partial_ratio", "fuzz_token_sort_ratio",
-    "fuzz_token_set_ratio", "fuzz_wratio", "fuzz_ratio_batch",
+    "fuzz_token_set_ratio", "fuzz_token_ratio",
+    "fuzz_wratio", "fuzz_ratio_batch",
     "fuzz_extract", "fuzz_extract_one",
     "fuzz_partial_token_sort_ratio", "fuzz_partial_token_set_ratio",
+    "fuzz_partial_token_ratio",
     "fuzz_qratio",
     # Optimized variants
     "levenshtein_myers", "needleman_wunsch_striped", "jaro_optimized",
@@ -167,12 +185,14 @@ __all__ = [
     "levenshtein", "damerau_levenshtein", "damerau",
     "needleman_wunsch", "needleman_wunsch_batch",
     "jaro", "jaro_winkler", "jaro_winkler_batch",
-    "ratio", "partial_ratio", "token_sort_ratio", "token_set_ratio",
-    "partial_token_sort_ratio", "partial_token_set_ratio",
+    "ratio", "partial_ratio", "partial_ratio_alignment",
+    "token_sort_ratio", "token_set_ratio", "token_ratio",
+    "partial_token_sort_ratio", "partial_token_set_ratio", "partial_token_ratio",
     "wratio", "WRatio", "QRatio", "ratio_batch",
     "extract", "extractOne", "extract_one",
     # Alignment helpers
     "editops", "opcodes",
+    "Editop", "Editops", "Opcode", "Opcodes", "MatchingBlock", "ScoreAlignment",
     # Submodules
     "fuzz", "process", "distance",
 ]

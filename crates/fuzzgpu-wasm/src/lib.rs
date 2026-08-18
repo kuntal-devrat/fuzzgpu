@@ -57,22 +57,22 @@ pub fn ratio(a: &str, b: &str) -> f64 {
 
 #[wasm_bindgen]
 pub fn partial_ratio(a: &str, b: &str) -> f64 {
-    fuzzgpu_core::partial_ratio(a, b)
+    fuzzgpu_core::partial_ratio(a, b, 0.0)
 }
 
 #[wasm_bindgen]
 pub fn token_sort_ratio(a: &str, b: &str) -> f64 {
-    fuzzgpu_core::token_sort_ratio(a, b)
+    fuzzgpu_core::token_sort_ratio(a, b, 0.0)
 }
 
 #[wasm_bindgen]
 pub fn token_set_ratio(a: &str, b: &str) -> f64 {
-    fuzzgpu_core::token_set_ratio(a, b)
+    fuzzgpu_core::token_set_ratio(a, b, 0.0)
 }
 
 #[wasm_bindgen]
 pub fn wratio(a: &str, b: &str) -> f64 {
-    fuzzgpu_core::wratio(a, b)
+    fuzzgpu_core::wratio(a, b, 0.0)
 }
 
 #[wasm_bindgen]

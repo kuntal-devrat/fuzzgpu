@@ -38,7 +38,7 @@ jobs:
         run: cargo test --workspace --verbose
 
       - name: Install dependencies
-        run: pip install maturin pytest pytest-timeout numpy
+        run: pip install maturin pytest pytest-timeout numpy rapidfuzz
 
       - name: Build & install extension
         run: pip install .

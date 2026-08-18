@@ -624,43 +624,56 @@ fn jaro_winkler_cdist_into(py: Python<'_>, list_a: &Bound<'_, PyAny>, list_b: &B
 // ── Fuzzy matching ──────────────────────────────────────────
 
 #[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::ratio(a, b)))
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::ratio_with_cutoff(a, b, score_cutoff)))
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_partial_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::partial_ratio(a, b)))
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_partial_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::partial_ratio(a, b, score_cutoff)))
 }
 
-/// partial_ratio_alignment: returns (score, src_start, dest_start, length).
-/// `src_start` is always 0 (shorter string); `dest_start` is the char offset
-/// in the longer string where the best matching window begins; `length` is the
-/// window width in chars.
+/// partial_ratio_alignment: returns rapidfuzz's ScoreAlignment shape
+/// (score, src_start, src_end, dest_start, dest_end). `src_start`/`src_end`
+/// are relative to the FIRST argument, `dest_start`/`dest_end` to the second.
 #[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_partial_ratio_alignment(py: Python, a: &str, b: &str) -> PyResult<(f64, usize, usize, usize)> {
-    py.allow_threads(|| Ok(fuzzgpu_core::partial_ratio_alignment(a, b)))
-}
-
-#[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_token_sort_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::token_sort_ratio(a, b)))
-}
-
-#[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_token_set_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::token_set_ratio(a, b)))
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_partial_ratio_alignment(
+    py: Python,
+    a: &str,
+    b: &str,
+    score_cutoff: f64,
+) -> PyResult<(f64, usize, usize, usize, usize)> {
+    py.allow_threads(|| {
+        let al = fuzzgpu_core::partial_ratio_alignment(a, b, score_cutoff);
+        Ok((al.score, al.src_start, al.src_end, al.dest_start, al.dest_end))
+    })
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_wratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::wratio(a, b)))
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_token_sort_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::token_sort_ratio(a, b, score_cutoff)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_token_set_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::token_set_ratio(a, b, score_cutoff)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_token_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::token_ratio(a, b, score_cutoff)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_wratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::wratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
@@ -728,52 +741,27 @@ fn jaro_optimized(py: Python, a: &str, b: &str) -> PyResult<f64> {
 // ── Additional fuzzy scorers (rapidfuzz compat) ─────────────
 
 #[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_partial_token_sort_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| {
-        let a_sorted = {
-            let mut tokens: Vec<&str> = a.split_whitespace().collect();
-            tokens.sort_unstable();
-            tokens.join(" ")
-        };
-        let b_sorted = {
-            let mut tokens: Vec<&str> = b.split_whitespace().collect();
-            tokens.sort_unstable();
-            tokens.join(" ")
-        };
-        Ok(fuzzgpu_core::partial_ratio(&a_sorted, &b_sorted))
-    })
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_partial_token_sort_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::partial_token_sort_ratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_partial_token_set_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| {
-        use std::collections::BTreeSet;
-        let t1: BTreeSet<&str> = a.split_whitespace().collect();
-        let t2: BTreeSet<&str> = b.split_whitespace().collect();
-        let inter: Vec<&str> = t1.intersection(&t2).copied().collect();
-        let diff1: Vec<&str> = t1.difference(&t2).copied().collect();
-        let diff2: Vec<&str> = t2.difference(&t1).copied().collect();
-        let inter_str = inter.join(" ");
-        let t1_str = if diff1.is_empty() { inter_str.clone() }
-            else if inter_str.is_empty() { diff1.join(" ") }
-            else { format!("{} {}", inter_str, diff1.join(" ")) };
-        let t2_str = if diff2.is_empty() { inter_str.clone() }
-            else if inter_str.is_empty() { diff2.join(" ") }
-            else { format!("{} {}", inter_str, diff2.join(" ")) };
-        let r01 = fuzzgpu_core::partial_ratio(&inter_str, &t1_str);
-        let r02 = fuzzgpu_core::partial_ratio(&inter_str, &t2_str);
-        let r12 = fuzzgpu_core::partial_ratio(&t1_str, &t2_str);
-        Ok(r01.max(r02).max(r12))
-    })
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_partial_token_set_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::partial_token_set_ratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(a, b, /)")]
-fn fuzz_qratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    // QRatio is identical to ratio — it is a rapidfuzz compatibility alias.
-    py.allow_threads(|| Ok(fuzzgpu_core::ratio(a, b)))
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_partial_token_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::partial_token_ratio(a, b, score_cutoff)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
+fn fuzz_qratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
+    py.allow_threads(|| Ok(fuzzgpu_core::qratio(a, b, score_cutoff)))
 }
 
 // ── Control & Utilities ─────────────────────────────────────
@@ -922,12 +910,14 @@ fn fuzzgpu(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fuzz_partial_ratio_alignment, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_token_sort_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_token_set_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(fuzz_token_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_wratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_ratio_batch, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_extract, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_extract_one, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_partial_token_sort_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_partial_token_set_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(fuzz_partial_token_ratio, m)?)?;
     m.add_function(wrap_pyfunction!(fuzz_qratio, m)?)?;
     // Optimized variants
     m.add_function(wrap_pyfunction!(levenshtein_myers, m)?)?;

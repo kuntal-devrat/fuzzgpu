@@ -1,7 +1,11 @@
 // fuzzgpu Jaro-Winkler compute shader (bitmap matcher, transposed layout).
 // Each invocation processes one string pair.
 // Max string length: 128 characters.
-// Output: Jaro-Winkler similarity as f32 bitcast to u32.
+// Output: per-pair 4×u32 — [matches, transpositions, prefix_len, 0] — at
+// results[pair_idx*4 .. pair_idx*4+4]. The host assembles the final f64 score
+// (rapidfuzz's exact formula), so GPU and CPU results are bit-identical; the
+// f32 score math is deliberately NOT done in the shader (f32 rounding there
+// produced ~1e-7 deviations from the f64 CPU reference).
 //
 // Two performance-critical design choices, both learned from measured
 // hardware behavior:
@@ -31,7 +35,6 @@ struct JaroParams {
     batch_size: u32,
     max_len: u32,
     offset: u32,
-    winkler_p_bits: u32,  // f32 Winkler prefix weight, bitcast to u32
 }
 
 @group(0) @binding(0) var<storage, read> len_a: array<u32>;
@@ -48,10 +51,19 @@ fn bit_test(mb: vec4<u32>, j: u32) -> bool {
 }
 
 // Return the bitmap with bit j set.
+// Uses select() instead of dynamic vector l-value indexing (v[expr] = ...)
+// because FXC (DX12 HLSL compiler) does not support dynamic vector component
+// writes — it cannot emit a register-indexed store for a non-constant index
+// and fails with X3550/X3511 when it tries to unroll around it.
 fn bit_set(mb: vec4<u32>, j: u32) -> vec4<u32> {
-    var v = mb;
-    v[j >> 5u] = v[j >> 5u] | (1u << (j & 31u));
-    return v;
+    let word = j >> 5u;
+    let bit  = 1u << (j & 31u);
+    return vec4<u32>(
+        mb.x | select(0u, bit, word == 0u),
+        mb.y | select(0u, bit, word == 1u),
+        mb.z | select(0u, bit, word == 2u),
+        mb.w | select(0u, bit, word == 3u),
+    );
 }
 
 @compute @workgroup_size(64)
@@ -61,20 +73,30 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let a_len = len_a[pair_idx];
     let b_len = len_b[pair_idx];
+    let out = pair_idx * 4u;
 
-    // Sentinel for strings > 128 chars (Rust recomputes on CPU)
+    // Sentinel: matches = 0xFFFFFFFF signals "CPU recompute" (Rust side).
     if (a_len > 128u || b_len > 128u) {
-        results[pair_idx] = bitcast<u32>(-1.0f);
+        results[out] = 0xFFFFFFFFu;
+        results[out + 1u] = 0u;
+        results[out + 2u] = 0u;
+        results[out + 3u] = 0u;
         return;
     }
 
     // Edge cases
     if (a_len == 0u && b_len == 0u) {
-        results[pair_idx] = bitcast<u32>(1.0f);
+        results[out] = 0xFFFFFFFFu;
+        results[out + 1u] = 0u;
+        results[out + 2u] = 0u;
+        results[out + 3u] = 0u;
         return;
     }
     if (a_len == 0u || b_len == 0u) {
-        results[pair_idx] = bitcast<u32>(0.0f);
+        results[out] = 0xFFFFFFFFu;
+        results[out + 1u] = 0u;
+        results[out + 2u] = 0u;
+        results[out + 3u] = 0u;
         return;
     }
 
@@ -110,7 +132,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     if (matches == 0u) {
-        results[pair_idx] = bitcast<u32>(0.0f);
+        results[out] = 0u;
+        results[out + 1u] = 0u;
+        results[out + 2u] = 0u;
+        results[out + 3u] = 0u;
         return;
     }
 
@@ -128,28 +153,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         k += 1u;
     }
 
-    // Jaro similarity
-    let m_f = f32(matches);
-    let a_f = f32(a_len);
-    let b_f = f32(b_len);
-    let t_f = f32(transpositions);
-    let jaro = (m_f / a_f + m_f / b_f + (m_f - t_f / 2.0) / m_f) / 3.0;
-
-    // Winkler prefix bonus (standard Winkler 1990: only when jaro >= 0.7),
-    // clamped to 1.0 exactly like the CPU reference.
-    var jw = jaro;
-    if (jaro >= 0.7) {
-        let p = bitcast<f32>(params.winkler_p_bits);
-        var prefix_len = 0u;
-        let max_prefix = min(min(a_len, b_len), 4u);
-        for (var i = 0u; i < max_prefix; i++) {
-            if (chars_a[i * params.batch_size + pair_idx] == chars_b[i * params.batch_size + pair_idx]) {
-                prefix_len += 1u;
-            } else {
-                break;
-            }
+    // Winkler prefix length (host applies the f64 boost).
+    var prefix_len = 0u;
+    let max_prefix = min(min(a_len, b_len), 4u);
+    for (var i = 0u; i < max_prefix; i++) {
+        if (chars_a[i * params.batch_size + pair_idx] == chars_b[i * params.batch_size + pair_idx]) {
+            prefix_len += 1u;
+        } else {
+            break;
         }
-        jw = min(jaro + f32(prefix_len) * p * (1.0 - jaro), 1.0);
     }
-    results[pair_idx] = bitcast<u32>(jw);
+
+    results[out] = matches;
+    results[out + 1u] = transpositions;
+    results[out + 2u] = prefix_len;
+    results[out + 3u] = 0u;
 }

@@ -88,7 +88,7 @@ fn jaro_inner_slice<T: PartialEq>(a: &[T], b: &[T], a_matches: &mut [bool], b_ma
 
     (matches as f64 / m as f64
         + matches as f64 / n as f64
-        + (matches as f64 - transpositions as f64 / 2.0) / matches as f64) / 3.0
+        + (matches as f64 - (transpositions / 2) as f64) / matches as f64) / 3.0
 }
 
 /// Jaro-Winkler similarity with prefix bonus.
@@ -268,7 +268,6 @@ pub mod gpu_ext {
         batch_size: u32,
         max_len: u32,
         offset: u32,
-        winkler_p_bits: u32,
     }
 
     #[repr(C)]
@@ -276,7 +275,43 @@ pub mod gpu_ext {
     struct JaroMatrixParams {
         rows: u32,
         cols: u32,
-        winkler_p_bits: u32,
+    }
+
+    /// Sentinel written by the shaders when a pair must be recomputed on CPU
+    /// (strings > 128 chars, empty inputs).
+    const GPU_RECOMPUTE: u32 = u32::MAX;
+
+    /// Assemble the f64 Jaro score from the GPU kernel's integer parts using
+    /// rapidfuzz's exact formula (integer floor division on transpositions,
+    /// f64 arithmetic throughout) — bit-identical to the CPU reference.
+    #[inline]
+    fn jaro_score_from_parts(matches: u32, transpositions: u32, a_len: u32, b_len: u32) -> f64 {
+        if matches == 0 {
+            return 0.0;
+        }
+        let t = (transpositions / 2) as f64;
+        let mf = matches as f64;
+        (mf / a_len as f64 + mf / b_len as f64 + (mf - t) / mf) / 3.0
+    }
+
+    /// Assemble Jaro-Winkler from GPU parts: f64 Jaro, then the Winkler prefix
+    /// boost (gate at 0.7, clamp to 1.0) — identical to the CPU path.
+    #[inline]
+    fn jaro_winkler_from_parts(
+        matches: u32,
+        transpositions: u32,
+        prefix_len: u32,
+        a_len: u32,
+        b_len: u32,
+        p: f64,
+    ) -> f64 {
+        let jaro = jaro_score_from_parts(matches, transpositions, a_len, b_len);
+        if jaro >= 0.7 {
+            let boost = prefix_len as f64 * p * (1.0 - jaro);
+            (jaro + boost).min(1.0)
+        } else {
+            jaro
+        }
     }
 
     /// CPU fallback for GPU-eligible pairs. When the pairs share one non-empty
@@ -478,7 +513,8 @@ pub mod gpu_ext {
 
             let chars_a_bytes = (chars_a.len() * 4) as u64;
             let chars_b_bytes = (chars_b.len() * 4) as u64;
-            let results_size = (batch_size as u64) * 4;
+            // 4×u32 per pair: [matches, transpositions, prefix_len, 0].
+            let results_size = (batch_size as u64) * 16;
 
             if chars_a_bytes > self.engine.max_buffer_size_effective()
                 || chars_b_bytes > self.engine.max_buffer_size_effective()
@@ -514,8 +550,6 @@ pub mod gpu_ext {
             let buf_staging = pool.get(SLOT_STAGING);
             let buf_params = pool.get(SLOT_PARAMS);
 
-            let winkler_p_bits = (p as f32).to_bits();
-
             // Per-chunk submit + readback (see the Levenshtein kernel: the
             // params buffer is written through the queue, so one shared submit
             // would give every dispatch the LAST chunk's offset).
@@ -525,7 +559,7 @@ pub mod gpu_ext {
 
             while remaining > 0 {
                 let chunk = remaining.min(MAX_DISPATCH);
-                let params = JaroParams { batch_size, max_len, offset, winkler_p_bits };
+                let params = JaroParams { batch_size, max_len, offset };
                 pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
                 let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -543,11 +577,22 @@ pub mod gpu_ext {
                 let mut encoder = self.engine.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("jaro encoder") });
                 let workgroups = (chunk + 63) / 64;
                 { let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None }); pass.set_pipeline(&self.pipeline); pass.set_bind_group(0, &bg, &[]); pass.dispatch_workgroups(workgroups, 1, 1); }
-                let chunk_bytes = (chunk as u64) * 4;
+                let chunk_bytes = (chunk as u64) * 16;
                 encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
                 let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
                 let raw: &[u32] = bytemuck::cast_slice(&bytes);
-                gpu_results.extend(raw.iter().map(|&bits| f32::from_bits(bits) as f64));
+                // Decode 4×u32 per pair and assemble the f64 score host-side
+                // (bit-exact with the CPU reference). GPU_RECOMPUTE pairs are
+                // returned as -1.0; compute_batch recomputes them on CPU.
+                for (t, part) in raw.chunks_exact(4).enumerate() {
+                    if part[0] == GPU_RECOMPUTE {
+                        gpu_results.push(-1.0);
+                    } else {
+                        gpu_results.push(jaro_winkler_from_parts(
+                            part[0], part[1], part[2], lens_a[t], lens_b[t], p,
+                        ));
+                    }
+                }
 
                 remaining -= chunk;
                 offset += chunk;
@@ -584,7 +629,7 @@ pub mod gpu_ext {
             let has_oversized = list_a.iter().any(|s| s.chars().count() > GPU_MAX_STRING_LEN)
                 || list_b.iter().any(|s| s.chars().count() > GPU_MAX_STRING_LEN);
 
-            let matrix_size = (total_pairs as u64) * 4;
+            let matrix_size = (total_pairs as u64) * 16;
 
             if has_oversized || matrix_size > self.engine.max_buffer_size_effective() {
                 return Ok(jaro_winkler_cdist_cpu(list_a, list_b, p));
@@ -639,8 +684,7 @@ pub mod gpu_ext {
             pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&lens_b));
             pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
 
-            let winkler_p_bits = (p as f32).to_bits();
-            let params = JaroMatrixParams { rows: rows as u32, cols: cols as u32, winkler_p_bits };
+            let params = JaroMatrixParams { rows: rows as u32, cols: cols as u32 };
             pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
@@ -696,11 +740,24 @@ pub mod gpu_ext {
                 .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
             let raw: &[u32] = bytemuck::cast_slice(&data);
 
+            // Decode 4×u32 per cell and assemble the f64 score host-side
+            // (bit-exact with the CPU reference). GPU_RECOMPUTE cells — empty
+            // inputs and strings in (128, 256] chars that overflow the
+            // shader's 128-bit match bitmap — are recomputed on CPU here.
             let mut matrix: Vec<Vec<f64>> = Vec::with_capacity(rows);
             for i in 0..rows {
-                let start = i * cols;
-                let end = start + cols;
-                matrix.push(raw[start..end].iter().map(|&bits| f32::from_bits(bits) as f64).collect());
+                let mut row_vec: Vec<f64> = Vec::with_capacity(cols);
+                for j in 0..cols {
+                    let part = &raw[(i * cols + j) * 4..(i * cols + j) * 4 + 4];
+                    if part[0] == GPU_RECOMPUTE {
+                        row_vec.push(crate::jaro_winkler(list_a[i], list_b[j], p));
+                    } else {
+                        row_vec.push(jaro_winkler_from_parts(
+                            part[0], part[1], part[2], lens_a[i], lens_b[j], p,
+                        ));
+                    }
+                }
+                matrix.push(row_vec);
             }
 
             drop(data);
@@ -769,7 +826,6 @@ pub mod gpu_ext {
             let mut lens_b: Vec<u32> = Vec::new();
             let mut gpu_global: u32 = 0;
             let mut max_len: u32 = 0;
-            let winkler_p_bits = (self.p as f32).to_bits();
 
             for (op_i, pairs) in self.ops.iter().enumerate() {
                 let mut op_results = vec![0.0f64; pairs.len()];
@@ -853,7 +909,8 @@ pub mod gpu_ext {
 
             let chars_a_bytes = (chars_a.len() * 4) as u64;
             let chars_b_bytes = (chars_b.len() * 4) as u64;
-            let results_size = (total_gpu as u64) * 4;
+            // 4×u32 per pair: [matches, transpositions, prefix_len, 0].
+            let results_size = (total_gpu as u64) * 16;
             let limit = self.kernel.engine.max_buffer_size_effective();
             if chars_a_bytes > limit || chars_b_bytes > limit || results_size > limit {
                 return Err(FuzzGpuError::BufferError(
@@ -891,7 +948,7 @@ pub mod gpu_ext {
             let mut offset = 0u32;
             while remaining > 0 {
                 let chunk = remaining.min(MAX_DISPATCH);
-                let params = JaroParams { batch_size: total_gpu as u32, max_len, offset, winkler_p_bits };
+                let params = JaroParams { batch_size: total_gpu as u32, max_len, offset };
                 pool.write(&self.kernel.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
                 let bg = self.kernel.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -919,7 +976,7 @@ pub mod gpu_ext {
                     pass.set_bind_group(0, &bg, &[]);
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
-                let chunk_bytes = (chunk as u64) * 4;
+                let chunk_bytes = (chunk as u64) * 16;
                 encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
                 let bytes = self.kernel.engine.readback(encoder, &pool, chunk_bytes)?;
                 raw.extend_from_slice(bytemuck::cast_slice(&bytes));
@@ -928,15 +985,24 @@ pub mod gpu_ext {
                 offset += chunk;
             }
 
-            // Split the flat result range back into per-op vectors (f32 bits -> f64).
+            // Split the flat result range back into per-op vectors, decoding
+            // the 4×u32 parts and assembling f64 scores host-side (bit-exact
+            // with the CPU reference). GPU_RECOMPUTE pairs recompute on CPU.
             for (op, &(start, count)) in gpu_ranges.iter().enumerate() {
                 for k in 0..count as usize {
                     let j = op_gpu_to_pair[op][k];
-                    let v = f32::from_bits(raw[(start as usize) + k]) as f64;
-                    if v < 0.0 {
+                    let part = &raw[(start as usize + k) * 4..(start as usize + k) * 4 + 4];
+                    if part[0] == GPU_RECOMPUTE {
                         out[op][j] = crate::jaro_winkler(self.ops[op][j].0, self.ops[op][j].1, self.p);
                     } else {
-                        out[op][j] = v;
+                        out[op][j] = jaro_winkler_from_parts(
+                            part[0],
+                            part[1],
+                            part[2],
+                            lens_a[start as usize + k],
+                            lens_b[start as usize + k],
+                            self.p,
+                        );
                     }
                 }
             }

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "fuzzgpu"
-version = "0.1.5"
+version = "0.1.7"
 description = "Hardware-accelerated fuzzy string matching & sequence alignment — cross-platform, no CUDA required"
 readme = "README.md"
 license = { text = "MIT" }

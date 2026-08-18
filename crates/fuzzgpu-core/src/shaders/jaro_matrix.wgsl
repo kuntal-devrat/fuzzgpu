@@ -4,11 +4,14 @@
 // batch kernel (jaro.wgsl), with the transposed layout per axis: chars_a are
 // indexed [i * rows + row], chars_b are [j * cols + col], so threads in a
 // workgroup row read consecutive addresses (coalesced).
+//
+// Output: per-cell 4×u32 — [matches, transpositions, prefix_len, 0] — at
+// matrix[cell*4 .. cell*4+4]. The host assembles the final f64 score so GPU
+// and CPU results are bit-identical (no f32 rounding in the shader).
 
 struct JaroMatrixParams {
     rows: u32,
     cols: u32,
-    winkler_p_bits: u32,
 }
 
 @group(0) @binding(0) var<storage, read> len_a: array<u32>;
@@ -22,10 +25,20 @@ fn bit_test(mb: vec4<u32>, j: u32) -> bool {
     return ((mb[j >> 5u] >> (j & 31u)) & 1u) != 0u;
 }
 
+// Return the bitmap with bit j set.
+// Uses select() instead of dynamic vector l-value indexing (v[expr] = ...)
+// because FXC (DX12 HLSL compiler) does not support dynamic vector component
+// writes — it cannot emit a register-indexed store for a non-constant index
+// and fails with X3550/X3511 when it tries to unroll around it.
 fn bit_set(mb: vec4<u32>, j: u32) -> vec4<u32> {
-    var v = mb;
-    v[j >> 5u] = v[j >> 5u] | (1u << (j & 31u));
-    return v;
+    let word = j >> 5u;
+    let bit  = 1u << (j & 31u);
+    return vec4<u32>(
+        mb.x | select(0u, bit, word == 0u),
+        mb.y | select(0u, bit, word == 1u),
+        mb.z | select(0u, bit, word == 2u),
+        mb.w | select(0u, bit, word == 3u),
+    );
 }
 
 @compute @workgroup_size(16, 16)
@@ -38,23 +51,33 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let out_idx = row * params.cols + col;
+    let out = out_idx * 4u;
 
     let a_len = len_a[row];
     let b_len = len_b[col];
 
-    // Edge cases
+    // Edge cases (host recomputes empty pairs on CPU)
     if (a_len == 0u && b_len == 0u) {
-        matrix[out_idx] = bitcast<u32>(1.0f);
+        matrix[out] = 0xFFFFFFFFu;
+        matrix[out + 1u] = 0u;
+        matrix[out + 2u] = 0u;
+        matrix[out + 3u] = 0u;
         return;
     }
     if (a_len == 0u || b_len == 0u) {
-        matrix[out_idx] = bitcast<u32>(0.0f);
+        matrix[out] = 0xFFFFFFFFu;
+        matrix[out + 1u] = 0u;
+        matrix[out + 2u] = 0u;
+        matrix[out + 3u] = 0u;
         return;
     }
 
     // Sentinel for strings > 128 chars (CPU recomputes)
     if (a_len > 128u || b_len > 128u) {
-        matrix[out_idx] = bitcast<u32>(-1.0f);
+        matrix[out] = 0xFFFFFFFFu;
+        matrix[out + 1u] = 0u;
+        matrix[out + 2u] = 0u;
+        matrix[out + 3u] = 0u;
         return;
     }
 
@@ -87,7 +110,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     if (matches == 0u) {
-        matrix[out_idx] = bitcast<u32>(0.0f);
+        matrix[out] = 0u;
+        matrix[out + 1u] = 0u;
+        matrix[out + 2u] = 0u;
+        matrix[out + 3u] = 0u;
         return;
     }
 
@@ -102,25 +128,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         k += 1u;
     }
 
-    let m_f = f32(matches);
-    let a_f = f32(a_len);
-    let b_f = f32(b_len);
-    let t_f = f32(transpositions);
-    let jaro = (m_f / a_f + m_f / b_f + (m_f - t_f / 2.0) / m_f) / 3.0;
-
-    var jw = jaro;
-    if (jaro >= 0.7) {
-        let p = bitcast<f32>(params.winkler_p_bits);
-        var prefix_len = 0u;
-        let max_prefix = min(min(a_len, b_len), 4u);
-        for (var i = 0u; i < max_prefix; i++) {
-            if (chars_a[i * params.rows + row] == chars_b[i * params.cols + col]) {
-                prefix_len += 1u;
-            } else {
-                break;
-            }
+    // Winkler prefix length (host applies the f64 boost).
+    var prefix_len = 0u;
+    let max_prefix = min(min(a_len, b_len), 4u);
+    for (var i = 0u; i < max_prefix; i++) {
+        if (chars_a[i * params.rows + row] == chars_b[i * params.cols + col]) {
+            prefix_len += 1u;
+        } else {
+            break;
         }
-        jw = min(jaro + f32(prefix_len) * p * (1.0 - jaro), 1.0);
     }
-    matrix[out_idx] = bitcast<u32>(jw);
+
+    matrix[out] = matches;
+    matrix[out + 1u] = transpositions;
+    matrix[out + 2u] = prefix_len;
+    matrix[out + 3u] = 0u;
 }

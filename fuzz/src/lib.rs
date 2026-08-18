@@ -148,7 +148,7 @@ pub fn run_ratios(data: &[u8]) {
     }
     let query = &strs[0];
     for c in &strs[1..] {
-        for r in [ratio(query, c), partial_ratio(query, c), token_sort_ratio(query, c), token_set_ratio(query, c), wratio(query, c)] {
+        for r in [ratio(query, c), partial_ratio(query, c, 0.0), token_sort_ratio(query, c, 0.0), token_set_ratio(query, c, 0.0), wratio(query, c, 0.0)] {
             // rapidfuzz-style percentages: 0..=100.
             assert!((0.0..=100.0).contains(&r), "ratio out of range: {r}");
         }
