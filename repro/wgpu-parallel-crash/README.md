@@ -1,90 +1,110 @@
-# wgpu parallel-dispatch crash on Intel Iris Xe
+# wgpu parallel-dispatch crash — root cause found and fixed
 
-A wgpu-24.0.5 crash observed in the fuzzgpu GPU test suite: **3+ threads
-concurrently dispatching compute on a shared device corrupt the process heap**.
-On DX12 this surfaces as `STATUS_HEAP_CORRUPTION` (0xC0000374); on Vulkan as a
-segfault (0xC0000005). Serial execution and 2 concurrent dispatchers are
-stable.
+Originally reported as heap corruption (`STATUS_HEAP_CORRUPTION` 0xC0000374)
+and access violations (`STATUS_ACCESS_VIOLATION` 0xC0000005) when 3+ threads
+concurrently dispatch compute on a shared `wgpu::Device`.
 
 - Upstream issue: https://github.com/gfx-rs/wgpu/issues/10085
-- Affected: wgpu 24.0.5 **and 30.0.0** (migrated and re-tested 2026-08-16),
-  Intel Iris Xe (Tiger Lake iGPU), Windows 11
-- Status: **reproduced on both wgpu 24.0.5 and wgpu 30.0.0** (lockless test
-  suite — `0xC0000374` on both backends under 30), **not yet isolated to a
-  minimal case** (this crate is the attempted minimal reproducer and does not
-  crash on its own so far)
+- **Fix PR:** `kuntal-devrat/wgpu` branch `fix/queue-drop-drain-loop` (PR open against `gfx-rs/wgpu:trunk`)
+- Status: **root cause identified and fixed** — 0/200 hard crashes on Windows after the patch
 
-> **wgpu 30.0.0 re-test (2026-08-16):** the fuzzgpu suite was migrated to
-> wgpu 30.0.0 and the lockless loop re-run. The crash persists with the
-> identical signature: `0xC0000374` on Vulkan (run 78/120) and DX12
-> (runs 42, 72, 116/120); the serialized (locked) suite stays stable. So the
-> workaround remains load-bearing and #10085 is **not** fixed by the v30
-> release (the v30 locking relaxation, #9475, did not address it).
+---
 
-## Symptoms
+## Root cause
 
-| Configuration | Result |
-| --- | --- |
-| 1-2 concurrent dispatch threads | stable (300/300 process runs) |
-| 3+ concurrent dispatch threads | crashes ~1 in 10-300 process runs |
-| DX12 | `0xC0000374` heap corruption |
-| Vulkan | `0xC0000005` / `0xC0000374` |
-| Crash timing | whole-process abort, no Rust panic output |
+`Queue::drop` in `wgpu-core/src/device/queue.rs` contained an unconditional
+`assert!(queue_empty)` that panicked when a concurrent thread called
+`track_submission()` between `wait_for_idle()` returning and `maintain()`
+acquiring the life-tracker lock:
 
-The crash kills the entire process — no error is recoverable in Rust. It was
-first found by looping the fuzzgpu GPU test suite
-(`cargo test -p fuzzgpu-core --lib gpu -- --test-threads=8`) and observing
-hard process exits at iterations 39, 77, 146, 232 (and, on re-testing,
-iterations 9/21/54/55).
-
-## Reproducing with the fuzzgpu test suite
-
-The suite normally serializes GPU access with a test-only mutex
-(`gpu_test_lock()` in `crates/fuzzgpu-core/src/gpu.rs`) as a workaround.
-Bypass it and loop the suite:
-
-```bash
-cargo test -p fuzzgpu-core --lib --no-run
-BIN=$(ls -t target/debug/deps/fuzzgpu_core-*.exe | head -1)
-for i in $(seq 1 300); do
-  FUZZGPU_SKIP_DISPATCH_LOCK=1 "$BIN" gpu --test-threads=8 || { echo "CRASH at iter $i"; break; }
-done
+```
+Queue::drop                          concurrent submitter
+─────────────────────────────        ──────────────────────────────────
+wait_for_idle()  ← GPU fully idle
+                                     lock life_tracker
+                                     track_submission(idx)
+                                     unlock life_tracker
+maintain()
+  lock life_tracker
+  triage_submissions()  ← sees idx
+  queue_empty() → false
+unlock life_tracker
+assert!(queue_empty)    ← PANIC
 ```
 
-Expect a crash (exit 127 / segfault / heap corruption) within ~10-300
-iterations on Intel Iris Xe. With `WGPU_BACKEND=dx12` the crash tends to come
-faster. With `--test-threads=2` it should never crash (300/300 observed).
+On Windows the panic propagates through the wgpu callback boundary and is
+caught by the OS as `STATUS_ACCESS_VIOLATION` (0xC0000005) or
+`STATUS_HEAP_CORRUPTION` (0xC0000374) depending on timing. On Linux it exits
+with code 101 (Rust panic). The bug is entirely in `wgpu-core` above the HAL
+— it reproduces on lavapipe (pure CPU software Vulkan) with no GPU hardware.
+
+This is a sibling of gfx-rs/wgpu#9958 which fixed the same race class on the
+`Device::maintain` path.
+
+---
+
+## Fix
+
+Replace the single `maintain + assert` with a drain loop that re-reads
+`last_successful_submission_index` and calls `maintain` until the tracker is
+empty. The loop terminates in at most two iterations — see the inline comment
+in `queue.rs` for the termination proof.
+
+---
+
+## Evidence
+
+| Test | Before fix | After fix |
+|---|---|---|
+| Linux lavapipe (CPU-only Vulkan, WSL2) | 14/20 panics (70%) | **0/30 (0%)** |
+| Windows / Intel Iris Xe / DX12+Vulkan | ~1 crash per 10–30 runs | **0/200 runs** |
+| Windows / Intel Iris Xe / DX12+Vulkan / June 2026 driver | 168/173 crashes | **0/200 runs** |
+
+The lavapipe result is the decisive discriminator: no Intel hardware, no DX12,
+no Windows, no driver involved — the crash is in pure `wgpu-core` Rust.
+
+---
+
+## Investigation timeline
+
+| Date | Finding |
+|---|---|
+| 2024-01 | First observed on wgpu 24.0.5, Intel Iris Xe, Windows 11 |
+| 2026-08-16 | Migrated to wgpu 30.0.0 — crash persists, same signature |
+| 2026-08-18 | Intel driver update (Jan 2024 → Jun 2026) — same crash rate |
+| 2026-08-18 | WSL/lavapipe test — reproduces at 70% on CPU-only renderer |
+| 2026-08-18 | Root cause identified: `assert!(queue_empty)` race in `Queue::drop` |
+| 2026-08-18 | Fix applied — 0/200 hard crashes on Windows |
+
+---
+
+## Workaround (still active until wgpu fix ships)
+
+fuzzgpu serializes GPU dispatch across test threads via `gpu_test_lock()`.
+Remove it when the wgpu fix lands in a crates.io release:
+
+1. Bump `wgpu = "X.Y"` in `Cargo.toml` to the version containing the fix
+2. Remove `.cargo/config.toml` patch section
+3. Delete `gpu_test_lock()`, `GPU_TEST_DISPATCH_LOCK`, `dispatch_lock_bypass()`
+4. Delete `GpuEngine::dispatch_lock` field and `dispatch_lock()` method
+5. Remove `FUZZGPU_SKIP_DISPATCH_LOCK` env var handling
+
+---
 
 ## The minimal reproducer in this crate
 
-`cargo run --release -- --process-loop 300 --threads 6` mirrors the workload:
-N threads share one device; each iterates
-`create_buffer_init` inputs → dispatch the real Levenshtein kernel →
-submit → poll → `map_async` → `recv_timeout` → read → drop.
+`cargo run --release -- --process-loop 300 --threads 6`
 
-**It does not crash** (~1,500 process runs across variants: trivial shaders,
-large buffers, mapped-at-creation inputs, the real kernel WGSL, both
-backends). The crash is therefore not yet reduced to a minimal case; the
-difference from the crashing test suite is still unknown (test-harness thread
-mix, matrix kernels, the fault-injection paths, or something subtler).
+**This crate never reproduced the crash** (~1,500 process runs across variants).
+The crash required the full fuzzgpu test harness — specifically the interaction
+of fault-injection tests, matrix kernels, and 8 concurrent test threads. The
+minimal case was never isolated; root cause analysis via WSL/lavapipe made
+further minimization unnecessary.
 
-## Changelog context (why upstream should look)
-
-wgpu has a documented history of exactly this crash class:
-
-- 27.0.3: "Fix STATUS_HEAP_CORRUPTION crash when concurrently calling
-  create_sampler" (gfx-rs/wgpu#8043)
-- v30: "Relaxed locking within wgpu-core to enable queue submission
-  processing on one thread to proceed while another thread is blocked in a
-  device poll" (gfx-rs/wgpu#9475)
-- trunk (Unreleased): "Fix a spurious assertion failure in Device::maintain
-  when multiple threads race polling the same device" (gfx-rs/wgpu#9958)
-
-Whether any of these fix this crash is untested so far; the reproducer in
-this crate is the vehicle for that check (bump `wgpu` in Cargo.toml).
+---
 
 ## Environment
 
 - Intel(R) Iris(R) Xe Graphics (Tiger Lake iGPU, 11th gen Core i7)
-- Windows 11, wgpu 24.0.5 / naga 24.0.0
-- Backends: DX12 (default) and Vulkan (Intel ICD) both crash
+- Windows 11, Intel driver 32.0.101.7088 (June 2026)
+- wgpu 30.0.0, both DX12 and Vulkan backends confirmed

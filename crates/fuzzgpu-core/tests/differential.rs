@@ -590,19 +590,10 @@ mod gpu_differential {
     /// Force GPU dispatch regardless of metric/auto routing: Jaro and Damerau
     /// auto-route to CPU on integrated GPUs (where the SIMD path wins), so the
     /// differentials must set an explicit override to actually exercise the
-    /// shaders. RAII guard restores `None` on drop; the dispatch lock prevents
-    /// races with other tests sharing the global override.
-    struct ForceGpu;
-    impl ForceGpu {
-        fn new() -> Self {
-            fuzzgpu_core::gpu::GpuEngine::set_gpu_threshold(Some(1));
-            ForceGpu
-        }
-    }
-    impl Drop for ForceGpu {
-        fn drop(&mut self) {
-            fuzzgpu_core::gpu::GpuEngine::set_gpu_threshold(None);
-        }
+    /// shaders. Uses `force_gpu_threshold` which holds the threshold test lock
+    /// for its lifetime, preventing races with other tests.
+    fn force_gpu() -> impl Drop {
+        fuzzgpu_core::gpu::force_gpu_threshold(1)
     }
 
     /// GPU computes in f32, CPU in f64 — compare with epsilon.
@@ -697,7 +688,7 @@ mod gpu_differential {
         fn jaro_gpu_batch_matches_cpu(pairs in prop::collection::vec(any_pair(32), 1000..=1000)) {
             let _gpu_guard = gpu_test_lock();
             let Some(kernel) = gpu_jaro_or_skip() else { return Ok(()); };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
             let mut pairs = pairs;
             // Oversized (> 128 chars) pairs must route to CPU inside compute_batch().
             pairs.push(("a".repeat(140), "b".repeat(140)));
@@ -753,7 +744,7 @@ mod gpu_differential {
         ) {
             let _gpu_guard = gpu_test_lock();
             let Some(kernel) = gpu_jaro_or_skip() else { return Ok(()); };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
             let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
             let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
             let gpu = kernel.compute_matrix(&refs_a, &refs_b, 0.1).expect("GPU Jaro matrix should succeed");
@@ -773,7 +764,7 @@ mod gpu_differential {
         fn damerau_gpu_batch_matches_cpu(pairs in prop::collection::vec(ascii_pair(32), 1000..=1000)) {
             let _gpu_guard = gpu_test_lock();
             let Some(kernel) = gpu_damerau_or_skip() else { return Ok(()); };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
             let mut pairs = pairs;
             // > 32 chars (CPU fallback) and Unicode (non-ASCII gate -> CPU).
             let long_a = "a".repeat(40);
@@ -802,7 +793,7 @@ mod gpu_differential {
         ) {
             let _gpu_guard = gpu_test_lock();
             let Some(kernel) = gpu_damerau_or_skip() else { return Ok(()); };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
             let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
             let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
             let gpu = kernel.compute_matrix(&refs_a, &refs_b).expect("GPU Damerau matrix should succeed");
@@ -877,7 +868,7 @@ mod gpu_differential {
     #[test]
     fn damerau_gpu_transposition_edges_match_cpu() {
         let _gpu_guard = gpu_test_lock();            let Some(kernel) = gpu_damerau_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
         let pairs: Vec<(&str, &str)> = vec![
             ("", ""),
@@ -908,7 +899,7 @@ mod gpu_differential {
     fn jaro_gpu_classic_cases_match_cpu() {
         let _gpu_guard = gpu_test_lock();
         let Some(kernel) = gpu_jaro_or_skip() else { return; };
-        let _force = ForceGpu::new();
+        let _force = force_gpu();
 
         let pairs: Vec<(&str, &str)> = vec![
             ("", ""),
@@ -940,7 +931,7 @@ mod gpu_differential {
         // Force GPU dispatch: the Jaro/Damerau metric routing sends small and
         // mid-size batches to CPU on integrated GPUs, which would silently
         // drop the batched-API coverage.
-        let _force = ForceGpu::new();
+        let _force = force_gpu();
 
         // Deterministic ASCII strings (same LCG as the lib tests).
         fn gen(count: usize, seed: u64) -> Vec<String> {

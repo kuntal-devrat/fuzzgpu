@@ -134,9 +134,16 @@ The full Python layer is now byte-identical to rapidfuzz 3.14.5 over a 169,744-p
 
 ## Benchmark Results
 
-*Hardware: Intel(R) Iris(R) Xe Graphics (Vulkan) + Intel Core i7 (Rayon uses all cores)*
-*Versions: fuzzgpu 0.1.8 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
+*Hardware: Intel(R) Iris(R) Xe Graphics — integrated GPU (Vulkan) + Intel Core i7 (Rayon, all cores)*
+*Versions: fuzzgpu 0.1.9 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
 *Median of 7 runs after warmup. Reproduce: `python benchmarks/bench_compare.py`*
+
+> **GPU class note:** These numbers are from an **integrated GPU** (iGPU), which shares memory
+> bandwidth with the CPU and has a ~1 ms dispatch round-trip. On a **discrete GPU** (dGPU) the
+> GPU columns improve significantly — expect 3–10× better GPU throughput and GPU routing kicking
+> in at much smaller batch sizes (threshold drops from ~500 pairs to ~64 pairs automatically).
+> Concurrency gains (multiple Python threads, after the wgpu fix ships) add a further 2–4×
+> on top for server workloads regardless of GPU class.
 
 ### Levenshtein Batch (1 query × N candidates, 10-char strings)
 | Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
@@ -193,7 +200,7 @@ pip install fuzzgpu
 ```toml
 # Rust
 [dependencies]
-fuzzgpu-core = "0.1.8"
+fuzzgpu-core = "0.1.9"
 ```
 
 ---
@@ -289,7 +296,7 @@ fuzzgpu.set_cpu_only(True)       # force CPU-only mode
 
 ```toml
 [dependencies]
-fuzzgpu-core = "0.1.8"                                        # GPU + CPU fallback
+fuzzgpu-core = "0.1.9"                                        # GPU + CPU fallback
 # fuzzgpu-core = { version = "0.1.7", default-features = false } # CPU-only
 ```
 

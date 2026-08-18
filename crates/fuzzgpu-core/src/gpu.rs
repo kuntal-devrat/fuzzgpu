@@ -106,15 +106,54 @@ pub(crate) fn effective_shader_source(real: &'static str) -> std::borrow::Cow<'s
     std::borrow::Cow::Borrowed(real)
 }
 
-// Serializes GPU dispatch across tests. The GPU is one shared hardware
-// resource, and hammering it with 3+ concurrent dispatches across many rapid
-// process runs trips a heap corruption / segfault in the wgpu stack on some
-// hardware (observed on Intel Iris Xe with both DX12 and Vulkan backends;
-// reproduces identically with tests that contain no fault-injection code).
-// Serializing access — standard practice for shared-device GPU test suites —
-// keeps parallel test execution stable. Production code is unaffected.
+/// Serialize GPU access across tests.
+///
+/// This is a workaround for a `wgpu-core` bug (`Queue::drop` spurious
+/// `assert!(queue_empty)` panic under concurrent dispatch) filed as
+/// gfx-rs/wgpu#10085. The fix is in branch `fix/queue-drop-drain-loop`
+/// (PR pending merge into `gfx-rs/wgpu`).
+///
+/// **Removal plan:** once the wgpu fix ships in a released version and
+/// `fuzzgpu` bumps its dependency to that version, remove:
+/// - This lock and its static
+/// - `dispatch_lock_bypass()` and `FUZZGPU_SKIP_DISPATCH_LOCK` support
+/// - `GpuEngine::dispatch_lock` field and `dispatch_lock()` method
+///
+/// Setting `FUZZGPU_SKIP_DISPATCH_LOCK=1` bypasses the workaround so the
+/// underlying crash can be reproduced / bisected in CI or locally.
 #[cfg(test)]
 pub(crate) static GPU_TEST_DISPATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Serializes tests that mutate `GPU_THRESHOLD_OVERRIDE`.
+///
+/// `ForceGpu` sets the global routing threshold to `1` and restores `None` on
+/// drop. With `--test-threads > 1`, a concurrent test's `ForceGpu::drop` can
+/// reset the threshold before the test that set it has finished dispatching.
+/// This mutex ensures only one test at a time holds an active threshold
+/// override. It is completely independent of `GPU_TEST_DISPATCH_LOCK`.
+#[cfg(test)]
+pub(crate) static GPU_THRESHOLD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquire the threshold-override test lock and set the GPU dispatch threshold
+/// to `threshold`. Returns a RAII guard that resets the threshold to `None`
+/// and releases the lock on drop. Call this instead of constructing `ForceGpu`
+/// directly.
+#[cfg(test)]
+pub(crate) fn force_gpu_threshold(
+    threshold: usize,
+) -> impl Drop {
+    struct ThresholdGuard(std::sync::MutexGuard<'static, ()>);
+    impl Drop for ThresholdGuard {
+        fn drop(&mut self) {
+            crate::gpu::GpuEngine::set_gpu_threshold(None);
+        }
+    }
+    let guard = GPU_THRESHOLD_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    GpuEngine::set_gpu_threshold(Some(threshold));
+    ThresholdGuard(guard)
+}
 
 #[derive(Error, Debug)]
 pub enum FuzzGpuError {
@@ -533,25 +572,39 @@ impl GpuEngine {
     async fn new_inner() -> Result<Arc<Self>> {
         let instance = wgpu::Instance::default();
 
-        let adapter = match instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-                apply_limit_buckets: false,
-            })
-            .await
-        {
-            Ok(a) => a,
-            Err(_) => instance
+        let adapter = if let Ok(name_filter) = std::env::var("FUZZGPU_FORCE_ADAPTER") {
+            let filter = name_filter.to_lowercase();
+            instance
+                .enumerate_adapters(wgpu::Backends::all())
+                .await
+                .into_iter()
+                .find(|a| a.get_info().name.to_lowercase().contains(&filter))
+                .ok_or_else(|| {
+                    FuzzGpuError::NoDevice(format!(
+                        "No adapter matching FUZZGPU_FORCE_ADAPTER={name_filter:?}"
+                    ))
+                })?
+        } else {
+            match instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::None,
+                    power_preference: wgpu::PowerPreference::HighPerformance,
                     compatible_surface: None,
-                    force_fallback_adapter: true,
+                    force_fallback_adapter: false,
                     apply_limit_buckets: false,
                 })
                 .await
-                .map_err(|e| FuzzGpuError::NoDevice(format!("No GPU adapter found: {e}")))?,
+            {
+                Ok(a) => a,
+                Err(_) => instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::None,
+                        compatible_surface: None,
+                        force_fallback_adapter: true,
+                        apply_limit_buckets: false,
+                    })
+                    .await
+                    .map_err(|e| FuzzGpuError::NoDevice(format!("No GPU adapter found: {e}")))?,
+            }
         };
 
         let adapter_info = adapter.get_info();
@@ -689,5 +742,32 @@ mod tests {
         assert_eq!(GpuEngine::last_routing(), (0, 0));
         GpuEngine::record_routing(750, 250);
         assert_eq!(GpuEngine::last_routing(), (750, 250));
+    }
+
+    /// Print every adapter visible to wgpu (all backends) plus the
+    /// force-fallback (WARP/llvmpipe) adapter. Used to verify which adapter
+    /// FUZZGPU_FORCE_ADAPTER will select and whether WARP is available.
+    #[test]
+    fn test_enumerate_adapters() {
+        let instance = wgpu::Instance::default();
+        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        eprintln!("=== Available adapters ({}) ===", adapters.len());
+        for a in &adapters {
+            let i = a.get_info();
+            eprintln!("  ENUM  {:?} | {} | {:?}", i.backend, i.name, i.device_type);
+        }
+        // Force-fallback path (WARP on DX12, llvmpipe/SwiftShader on Vulkan)
+        match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::None,
+            compatible_surface: None,
+            force_fallback_adapter: true,
+            apply_limit_buckets: false,
+        })) {
+            Ok(a) => {
+                let i = a.get_info();
+                eprintln!("  WARP  {:?} | {} | {:?}", i.backend, i.name, i.device_type);
+            }
+            Err(_) => eprintln!("  WARP  <not available>"),
+        }
     }
 }

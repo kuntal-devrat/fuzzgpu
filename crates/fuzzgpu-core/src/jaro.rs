@@ -1061,17 +1061,8 @@ pub mod gpu_ext {
         /// Jaro to CPU on integrated GPUs where the SIMD path wins). The
         /// override is global, so the RAII guard restores `None` on drop;
         /// tests hold the GPU lock, so it cannot race with other tests.
-        struct ForceGpu;
-        impl ForceGpu {
-            fn new() -> Self {
-                GpuEngine::set_gpu_threshold(Some(1));
-                ForceGpu
-            }
-        }
-        impl Drop for ForceGpu {
-            fn drop(&mut self) {
-                GpuEngine::set_gpu_threshold(None);
-            }
+        fn force_gpu() -> impl Drop {
+            crate::gpu::force_gpu_threshold(1)
         }
 
         /// Exercises shader compilation, buffer sizing/allocation, dispatch,
@@ -1080,7 +1071,7 @@ pub mod gpu_ext {
         fn test_gpu_batch_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a = gen_strings(1000, 0xFEEDFACE);
             let b = gen_strings(1000, 0x0DDBA11);
@@ -1104,7 +1095,7 @@ pub mod gpu_ext {
         fn test_gpu_matrix_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a = gen_strings(30, 0x13579BDF);
             let b = gen_strings(30, 0x2468ACE0);
@@ -1124,7 +1115,7 @@ pub mod gpu_ext {
         fn test_batch_readback_timeout_returns_timeout_error() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a = gen_strings(1000, 0xFEED1234);
             let b = gen_strings(1000, 0x0DD5A11);
@@ -1147,7 +1138,7 @@ pub mod gpu_ext {
         fn test_matrix_readback_timeout_returns_timeout_error() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a = gen_strings(30, 0x33333333);
             let b = gen_strings(30, 0x44444444);
@@ -1171,7 +1162,7 @@ pub mod gpu_ext {
         fn test_buffer_size_validation_returns_buffer_error() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a = gen_strings(1000, 0xC0FFEE01);
             let b = gen_strings(1000, 0x0FF1CE11);
@@ -1195,7 +1186,7 @@ pub mod gpu_ext {
         fn test_matrix_oversize_falls_back_to_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a = gen_strings(32, 0xA11CEB00);
             let b = gen_strings(32, 0xB00B1355);
@@ -1249,7 +1240,7 @@ pub mod gpu_ext {
         fn test_jaro_batch_invalid_p_returns_invalid_input() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let pairs: Vec<(&str, &str)> = vec![("MARTHA", "MARHTA"), ("hello", "world")];
             for bad in [0.26f64, -0.1, 0.5, f64::NAN] {
@@ -1268,7 +1259,7 @@ pub mod gpu_ext {
         fn test_jaro_matrix_invalid_p_returns_invalid_input() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let list_a = ["MARTHA", "hello"];
             let list_b = ["MARHTA", "world"];
@@ -1289,7 +1280,7 @@ pub mod gpu_ext {
         fn test_gpu_batch_matches_compute_batch() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a1 = gen_strings(600, 0x1A2B3C4D);
             let b1 = gen_strings(600, 0x5E6F7081);
@@ -1333,7 +1324,7 @@ pub mod gpu_ext {
         fn test_gpu_batch_invalid_p_returns_invalid_input() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             for bad in [0.26f64, -0.1, 0.5, f64::NAN] {
                 match kernel.batch(bad) {
@@ -1350,7 +1341,7 @@ pub mod gpu_ext {
         fn test_gpu_batch_empty_returns_empty() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let batch = kernel.batch(0.1).expect("batch creation");
             assert!(batch.is_empty());

@@ -649,17 +649,8 @@ pub mod gpu_ext {
         /// Force GPU dispatch regardless of metric/auto routing (which sends
         /// Damerau to CPU on integrated GPUs where the SIMD path wins). RAII
         /// guard restores the override on drop; tests hold the GPU lock.
-        struct ForceGpu;
-        impl ForceGpu {
-            fn new() -> Self {
-                GpuEngine::set_gpu_threshold(Some(1));
-                ForceGpu
-            }
-        }
-        impl Drop for ForceGpu {
-            fn drop(&mut self) {
-                GpuEngine::set_gpu_threshold(None);
-            }
+        fn force_gpu() -> impl Drop {
+            crate::gpu::force_gpu_threshold(1)
         }
 
         /// Exercises shader compilation, buffer sizing/allocation, dispatch,
@@ -671,7 +662,7 @@ pub mod gpu_ext {
         fn test_gpu_batch_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a = gen_strings(1000, 0xD00DCAFE);
             let b = gen_strings(1000, 0x0DDBA11);
@@ -706,7 +697,7 @@ pub mod gpu_ext {
         fn test_gpu_matrix_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
             let Some(kernel) = gpu_kernel_or_skip() else { return; };
-            let _force = ForceGpu::new();
+            let _force = force_gpu();
 
             let a = gen_strings(30, 0x13579BDF);
             let b = gen_strings(30, 0x2468ACE0);
