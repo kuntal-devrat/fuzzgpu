@@ -25,10 +25,20 @@ fn bit_test(mb: vec4<u32>, j: u32) -> bool {
     return ((mb[j >> 5u] >> (j & 31u)) & 1u) != 0u;
 }
 
+// Return the bitmap with bit j set.
+// Uses select() instead of dynamic vector l-value indexing (v[expr] = ...)
+// because FXC (DX12 HLSL compiler) does not support dynamic vector component
+// writes — it cannot emit a register-indexed store for a non-constant index
+// and fails with X3550/X3511 when it tries to unroll around it.
 fn bit_set(mb: vec4<u32>, j: u32) -> vec4<u32> {
-    var v = mb;
-    v[j >> 5u] = v[j >> 5u] | (1u << (j & 31u));
-    return v;
+    let word = j >> 5u;
+    let bit  = 1u << (j & 31u);
+    return vec4<u32>(
+        mb.x | select(0u, bit, word == 0u),
+        mb.y | select(0u, bit, word == 1u),
+        mb.z | select(0u, bit, word == 2u),
+        mb.w | select(0u, bit, word == 3u),
+    );
 }
 
 @compute @workgroup_size(16, 16)

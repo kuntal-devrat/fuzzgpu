@@ -8,7 +8,7 @@
 
 *Cross-platform GPU compute via WebGPU (`wgpu`) & Multi-Core CPU parallelism with Rayon. Zero CUDA dependencies.*
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.6-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.7-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg?style=flat-square)](https://www.rust-lang.org)
 [![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
@@ -31,34 +31,50 @@ No NVIDIA CUDA drivers or complex toolkits required.
 
 ---
 
-## What's New in v0.1.6
+## What's New in v0.1.7
+
+### Bug fixes (Windows DX12 / Jaro shader)
+- **Jaro GPU shader FXC crash fixed** — `jaro.wgsl` and `jaro_matrix.wgsl` used dynamic vector
+  component writes (`v[j >> 5u] = ...`) in `bit_set()`. FXC (the DX12 HLSL compiler) cannot
+  emit a dynamic register-indexed store for a non-constant index, causing a hard compile failure
+  with `X3550`/`X3511` on every Windows DX12 runner — all 11 Jaro GPU tests were panicking.
+  Fixed by rewriting `bit_set` with `select()`-based static construction, which compiles
+  identically on all backends (Vulkan, Metal, DX12).
+
+### Bug fixes (arity mismatch — wasm & fuzz crates)
+- **`fuzzgpu-wasm`** — `partial_ratio`, `token_sort_ratio`, `token_set_ratio`, `wratio` gained
+  a `score_cutoff: f64` parameter in the v0.1.6 Rust core rewrite for rapidfuzz parity, but
+  the WASM bindings were not updated, causing 4 `E0061` compile errors. Fixed by passing
+  `0.0` as the cutoff (no cutoff — identical to the previous behaviour).
+- **`fuzzgpu-fuzz`** — same four callsites in `fuzz/src/lib.rs` had the same arity mismatch.
+  Fixed identically.
+
+### Includes all v0.1.6 features
+All features from v0.1.6 are included — see the v0.1.6 changelog below.
+
+---
+
+<details>
+<summary><b>Previous (v0.1.6)</b></summary>
 
 ### Drop-in rapidfuzz parity (Python)
 The full Python layer is now byte-identical to rapidfuzz 3.14.5 over a 169,744-pair differential harness across `ratio`, `partial_ratio`, `token_sort_ratio`, `token_set_ratio`, `token_ratio`, `WRatio`, `QRatio`, `partial_token_*`, `jaro`, `jaro_winkler`, `levenshtein`, `indel`, `hamming`, `osa` — **0 mismatches**.
 
 ### Bug fixes (Rust core, float parity)
-- **`ratio` / `partial_ratio` cutoff imprecision** — port of rapidfuzz's load-bearing `NormSim_to_NormDist = min(1, 1 - cutoff/100 + 1e-5)` term. Without it, the branch-and-bound would silently reject ties at exact cutoffs (e.g. `partial_ratio("park", "ba", score_cutoff=50.0)` returned `0` instead of `50`).
-- **`ratio` score formula** — switched from `((len-dist)/len)*100` to `(1 - dist/len)*100` to match rapidfuzz C++'s exact ulp order (`indel_normalized_similarity * 100`).
+- **`ratio` / `partial_ratio` cutoff imprecision** — port of rapidfuzz's load-bearing `NormSim_to_NormDist = min(1, 1 - cutoff/100 + 1e-5)` term.
+- **`ratio` score formula** — switched from `((len-dist)/len)*100` to `(1 - dist/len)*100` to match rapidfuzz C++'s exact ulp order.
 
 ### New features (Python distance layer)
-- **`Editops` / `Opcodes` / `Editop` / `Opcode` / `MatchingBlock` / `ScoreAlignment`** classes (rapidfuzz-compatible list-/tuple-likes with `as_list`, `as_opcodes`, `as_editops`, `as_matching_blocks`, `apply`, `inverse`, `remove_subsequence`, `from_*`).
-- **`Levenshtein.editops` / `.opcodes`** — exact Myers bit-parallel port with `common_affix` (suffix measured on post-prefix slice, matching rapidfuzz).
-- **`LCSseq`** module — Myers LCS bit-parallel matrix + editops/opcodes (delete-checked-first traceback).
-- **`Prefix`** and **`Postfix`** modules with the C++ `1 - dist/maximum` ulp order.
-- **`Hamming.editops` / `.opcodes`** — replace-per-mismatch + padding delete/insert model.
-- **`Indel.editops` / `.opcodes`** — delegates to `LCSseq` (matching rapidfuzz C++).
-- **`fuzz.partial_ratio_alignment`** now returns `ScoreAlignment(score, src_start, src_end, dest_start, dest_end)` — drop-in compatible with rapidfuzz.
-- **`process.extract` / `extractOne` / `cdist`** default to `WRatio` (matches rapidfuzz 3.14.5).
-- **`token_ratio` / `partial_token_ratio`** exposed at top level (`fuzzgpu.token_ratio`, `fuzzgpu.partial_token_ratio`).
-- All alignment types re-exported at the package root (`fuzzgpu.Editop`, `fuzzgpu.Editops`, etc.).
+- **`Editops` / `Opcodes` / `Editop` / `Opcode` / `MatchingBlock` / `ScoreAlignment`** classes (rapidfuzz-compatible).
+- **`Levenshtein.editops` / `.opcodes`**, **`LCSseq`**, **`Prefix`**, **`Postfix`**, **`Hamming.editops`**, **`Indel.editops`** modules.
+- **`fuzz.partial_ratio_alignment`** returns `ScoreAlignment` (rapidfuzz-compatible).
+- **`process.extract` / `extractOne` / `cdist`** default to `WRatio`.
+- All alignment types re-exported at the package root.
 
-### Type stubs
-- `__init__.pyi`, `fuzz.pyi`, `process.pyi`, `distance/__init__.pyi` updated for the new APIs.
-
----
+</details>
 
 <details>
-<summary><b>Previous (v0.1.5</b</summary>
+<summary><b>Previous (v0.1.5)</b></summary>
 
 ### Bug fixes
 - **Damerau-Levenshtein safety gate** now fires in release builds (`assert!` not `debug_assert!`) — non-ASCII inputs no longer silently produce wrong distances in production wheels
@@ -118,7 +134,7 @@ pip install fuzzgpu
 ```toml
 # Rust
 [dependencies]
-fuzzgpu-core = "0.1.6"
+fuzzgpu-core = "0.1.7"
 ```
 
 ---
@@ -214,8 +230,8 @@ fuzzgpu.set_cpu_only(True)       # force CPU-only mode
 
 ```toml
 [dependencies]
-fuzzgpu-core = "0.1.6"                                        # GPU + CPU fallback
-# fuzzgpu-core = { version = "0.1.6", default-features = false } # CPU-only
+fuzzgpu-core = "0.1.7"                                        # GPU + CPU fallback
+# fuzzgpu-core = { version = "0.1.7", default-features = false } # CPU-only
 ```
 
 ```rust
