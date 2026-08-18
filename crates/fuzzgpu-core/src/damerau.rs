@@ -234,7 +234,9 @@ pub mod gpu_ext {
             let engine = GpuEngine::get()?;
             let kernel = Self::new_inner(engine)?;
             let _ = GLOBAL_GPU_DAMERAU_KERNEL.set(kernel);
-            Ok(GLOBAL_GPU_DAMERAU_KERNEL.get().unwrap())
+            GLOBAL_GPU_DAMERAU_KERNEL.get().ok_or_else(|| FuzzGpuError::NoDevice(
+                "Damerau kernel unexpectedly absent after init".into()
+            ))
         }
 
         fn new_inner(engine: std::sync::Arc<GpuEngine>) -> Result<Self> {
