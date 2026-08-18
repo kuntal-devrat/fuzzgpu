@@ -8,7 +8,7 @@
 
 *Cross-platform GPU compute via WebGPU (`wgpu`) & Multi-Core CPU parallelism with Rayon. Zero CUDA dependencies.*
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.7-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.8-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg?style=flat-square)](https://www.rust-lang.org)
 [![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
@@ -31,28 +31,60 @@ No NVIDIA CUDA drivers or complex toolkits required.
 
 ---
 
-## What's New in v0.1.7
+## What's New in v0.1.8
+
+### Production hardening
+- **Kernel `get()` panics eliminated** — all four GPU kernels (`GpuLevenshteinKernel`,
+  `GpuJaroKernel`, `GpuNeedlemanAffineKernel`, `GpuDamerauKernel`) previously called
+  `.unwrap()` on `OnceLock::get()` after initialization, which could panic the Python
+  interpreter under rare concurrent races. Replaced with `.ok_or_else(...)` returning
+  a proper `FuzzGpuError::NoDevice`.
+- **`debug_assert!` → real release guards** — `MyersPattern::new`, `jaro_bitpar`, `jaro_4way`
+  were guarded only by `debug_assert!`. In release builds, calling them with inputs outside
+  their contract (non-ASCII or > 64 bytes) would silently produce wrong results. Promoted to
+  proper `assert!` with descriptive messages that surface immediately in both debug and release.
+
+### New API surface
+- **`fuzz.cdist`** — pairwise score matrix, mirrors `rapidfuzz.fuzz.cdist`. Delegates to
+  `process.cdist` with `ratio` as the default scorer.
+- **`DamerauLevenshtein.editops` / `.opcodes`** — full Lowrance-Wagner traceback returning
+  `Editops` / `Opcodes` (insert/delete/replace), completing parity with rapidfuzz's alignment
+  API for this module.
+- **`fuzz.__all__`** now includes `partial_ratio_alignment` and `cdist` (were missing).
+
+### API correctness fixes
+- **`Jaro.similarity` / `JaroWinkler.similarity` `score_cutoff`** — changed default from
+  `0.0` to `None`, matching rapidfuzz's semantics (`0.0` treated scores of exactly 0.0 as
+  filtered, which was wrong).
+- **`ratio_batch(workers=)`** — was silently ignored (`del workers`). Now wires up a
+  `ThreadPoolExecutor` for the processor path; the no-processor path continues to use Rayon
+  internally (ignoring `workers` is correct there — Rayon already uses all cores).
+- **`process.cdist` fast path** — rewrote to use `fuzz_ratio_batch` row-by-row (each row
+  runs under Rayon across all cores) instead of a dead `raw = _native.fuzz_ratio_batch`
+  assignment followed by the same loop. Removed the dead `raw:` type-hint-only line.
+- **`process.cdist` silent swallow** — `except Exception: pass` replaced with
+  `warnings.warn(...)` so unexpected fast-path failures are visible instead of silently
+  producing slow results.
+
+### Includes all v0.1.7 fixes
+All fixes from v0.1.7 are included — see the v0.1.7 changelog below.
+
+---
+
+<details>
+<summary><b>Previous (v0.1.7)</b></summary>
 
 ### Bug fixes (Windows DX12 / Jaro shader)
 - **Jaro GPU shader FXC crash fixed** — `jaro.wgsl` and `jaro_matrix.wgsl` used dynamic vector
-  component writes (`v[j >> 5u] = ...`) in `bit_set()`. FXC (the DX12 HLSL compiler) cannot
-  emit a dynamic register-indexed store for a non-constant index, causing a hard compile failure
-  with `X3550`/`X3511` on every Windows DX12 runner — all 11 Jaro GPU tests were panicking.
-  Fixed by rewriting `bit_set` with `select()`-based static construction, which compiles
-  identically on all backends (Vulkan, Metal, DX12).
+  component writes (`v[j >> 5u] = ...`) in `bit_set()`. Fixed by rewriting `bit_set` with
+  `select()`-based static construction (Vulkan, Metal, DX12 all compile identically).
 
 ### Bug fixes (arity mismatch — wasm & fuzz crates)
-- **`fuzzgpu-wasm`** — `partial_ratio`, `token_sort_ratio`, `token_set_ratio`, `wratio` gained
-  a `score_cutoff: f64` parameter in the v0.1.6 Rust core rewrite for rapidfuzz parity, but
-  the WASM bindings were not updated, causing 4 `E0061` compile errors. Fixed by passing
-  `0.0` as the cutoff (no cutoff — identical to the previous behaviour).
-- **`fuzzgpu-fuzz`** — same four callsites in `fuzz/src/lib.rs` had the same arity mismatch.
-  Fixed identically.
+- **`fuzzgpu-wasm`** and **`fuzzgpu-fuzz`** — 4 × `E0061` arity mismatch for
+  `partial_ratio`/`token_sort_ratio`/`token_set_ratio`/`wratio`. Fixed by passing `0.0`
+  as the cutoff.
 
-### Includes all v0.1.6 features
-All features from v0.1.6 are included — see the v0.1.6 changelog below.
-
----
+</details>
 
 <details>
 <summary><b>Previous (v0.1.6)</b></summary>
@@ -103,25 +135,52 @@ The full Python layer is now byte-identical to rapidfuzz 3.14.5 over a 169,744-p
 ## Benchmark Results
 
 *Hardware: Intel(R) Iris(R) Xe Graphics (Vulkan) + Intel Core i7 (Rayon uses all cores)*
-*Versions: fuzzgpu 0.1.6 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
+*Versions: fuzzgpu 0.1.8 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
 *Median of 7 runs after warmup. Reproduce: `python benchmarks/bench_compare.py`*
 
 ### Levenshtein Batch (1 query × N candidates, 10-char strings)
 | Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **100** | 0.12 ms | 0.01 ms | 0.03 ms | 0.25× | 2.21× |
-| **1,000** | 0.83 ms | 0.09 ms | 0.15 ms | 0.18× | 1.67× |
-| **10,000** | 2.60 ms | 0.87 ms | 1.47 ms | 0.57× | 1.68× |
-| **50,000** | 9.92 ms | 5.04 ms | 6.38 ms | 0.64× | 1.27× |
+| **100** | 0.04 ms | 0.00 ms | 0.01 ms | 0.24× | 1.90× |
+| **1,000** | 0.50 ms | 0.04 ms | 0.07 ms | 0.13× | 1.89× |
+| **10,000** | 1.53 ms | 0.40 ms | 0.64 ms | 0.42× | 1.61× |
+| **50,000** | 6.87 ms | 3.36 ms | 4.46 ms | 0.65× | 1.33× |
 
 ### Damerau-Levenshtein Batch (unrestricted Lowrance-Wagner)
 | Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **1,000** | 0.58 ms | 0.40 ms | 1.63 ms | 2.81× | 4.06× |
-| **10,000** | 2.95 ms | 2.15 ms | 20.86 ms | 7.06× | 9.70× |
-| **50,000** | 17.49 ms | 12.08 ms | 120.25 ms | 6.88× | 9.95× |
+| **100** | 0.04 ms | 0.04 ms | 0.10 ms | 2.68× | 2.63× |
+| **1,000** | 0.21 ms | 0.20 ms | 0.98 ms | 4.71× | 4.89× |
+| **10,000** | 1.39 ms | 1.49 ms | 9.93 ms | 7.14× | 6.67× |
+| **50,000** | 10.19 ms | 9.91 ms | 66.57 ms | 6.54× | 6.72× |
 
 > **Note:** rapidfuzz's `DamerauLevenshtein` uses Optimal String Alignment (OSA). fuzzgpu implements the **unrestricted** Lowrance-Wagner (1975) algorithm which allows non-adjacent transpositions. For example: `damerau("ca", "abc") == 2` (fuzzgpu) vs `3` (rapidfuzz OSA). Use `fuzzgpu.distance.OSA` for OSA-compatible semantics.
+
+### Jaro-Winkler Batch (p = 0.1)
+| Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **100** | 0.02 ms | 0.01 ms | 0.02 ms | 0.87× | 1.14× |
+| **1,000** | 0.18 ms | 0.13 ms | 0.12 ms | 0.70× | 0.94× |
+| **10,000** | 1.01 ms | 0.83 ms | 0.97 ms | 0.96× | 1.18× |
+| **50,000** | 5.61 ms | 3.25 ms | 6.69 ms | 1.19× | 2.06× |
+
+### Needleman-Wunsch Affine Batch (match=1, mismatch=-1, gap_open=-2, gap_extend=-1)
+| Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` |
+| :--- | :---: | :---: | :---: |
+| **100** | 0.07 ms | 0.05 ms | — |
+| **1,000** | 1.65 ms | 0.43 ms | — |
+| **10,000** | 12.49 ms | 3.91 ms | — |
+| **50,000** | 47.86 ms | 26.95 ms | — |
+
+> rapidfuzz has no Needleman-Wunsch API — no comparison available.
+
+### Levenshtein Cross-Product Matrix (`cdist`)
+| Matrix Size | Total Pairs | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | python-Levenshtein | vs RF (GPU) | vs RF (CPU) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **10 × 10** | 100 | 0.05 ms | 0.02 ms | 0.01 ms | 0.06 ms | 0.18× | 0.56× |
+| **50 × 50** | 2,500 | 0.58 ms | 0.11 ms | 0.09 ms | 2.17 ms | 0.16× | 0.81× |
+| **100 × 100** | 10,000 | 0.67 ms | 0.25 ms | 0.18 ms | 5.75 ms | 0.27× | 0.70× |
+| **200 × 200** | 40,000 | 1.19 ms | 0.81 ms | 0.61 ms | 22.31 ms | 0.51× | 0.75× |
 
 ---
 
@@ -134,7 +193,7 @@ pip install fuzzgpu
 ```toml
 # Rust
 [dependencies]
-fuzzgpu-core = "0.1.7"
+fuzzgpu-core = "0.1.8"
 ```
 
 ---
@@ -230,7 +289,7 @@ fuzzgpu.set_cpu_only(True)       # force CPU-only mode
 
 ```toml
 [dependencies]
-fuzzgpu-core = "0.1.7"                                        # GPU + CPU fallback
+fuzzgpu-core = "0.1.8"                                        # GPU + CPU fallback
 # fuzzgpu-core = { version = "0.1.7", default-features = false } # CPU-only
 ```
 

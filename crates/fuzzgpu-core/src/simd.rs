@@ -110,7 +110,11 @@ pub(crate) struct MyersPattern {
 impl MyersPattern {
     /// Build pattern state. `pattern` must be non-empty ASCII ≤ 64 bytes.
     pub(crate) fn new(pattern: &[u8]) -> Self {
-        debug_assert!(!pattern.is_empty() && pattern.len() <= 64 && pattern.is_ascii());
+        assert!(
+            !pattern.is_empty() && pattern.len() <= 64 && pattern.is_ascii(),
+            "MyersPattern: pattern must be non-empty ASCII ≤ 64 bytes (got {} bytes, ascii={})",
+            pattern.len(), pattern.is_ascii()
+        );
         let mut peq = [0u64; 256];
         for (j, &ch) in pattern.iter().enumerate() {
             peq[ch as usize] |= 1u64 << j;
@@ -429,7 +433,8 @@ pub(crate) unsafe fn levenshtein_myers_2way_neon(pat: &MyersPattern, texts: [&[u
 
 /// 4-way kernel over a prebuilt pattern (see [`MyersPattern`]).
 pub(crate) fn levenshtein_myers_4way_pat(pat: &MyersPattern, texts: [&[u8]; 4]) -> [u32; 4] {
-    debug_assert!(texts.iter().all(|t| t.is_ascii()));
+    debug_assert!(texts.iter().all(|t| t.is_ascii()),
+        "levenshtein_myers_4way_pat: all text inputs must be ASCII");
     #[cfg(target_arch = "x86_64")]
     {
         if avx2_available() {
@@ -442,7 +447,8 @@ pub(crate) fn levenshtein_myers_4way_pat(pat: &MyersPattern, texts: [&[u8]; 4]) 
 
 /// Scalar Myers over a prebuilt pattern (tail/fallback path of the batch).
 pub(crate) fn levenshtein_myers_pattern(pat: &MyersPattern, text: &[u8]) -> u32 {
-    debug_assert!(text.is_ascii());
+    debug_assert!(text.is_ascii(),
+        "levenshtein_myers_pattern: text must be ASCII");
     let MyersPattern { peq, m, mask, last_bit } = pat;
     let mut pv: u64 = *mask;
     let mut mv: u64 = 0;
@@ -624,8 +630,11 @@ unsafe fn levenshtein_myers_4way_avx2(pat: &MyersPattern, texts: [&[u8]; 4]) -> 
 /// walk as the reference. ASCII bytes, both inputs ≤ 64 (the position masks
 /// must fit one u64).
 pub fn jaro_bitpar(a: &[u8], b: &[u8]) -> f64 {
-    debug_assert!(a.len() <= 64 && b.len() <= 64);
-    debug_assert!(a.is_ascii() && b.is_ascii());
+    assert!(
+        a.len() <= 64 && b.len() <= 64 && a.is_ascii() && b.is_ascii(),
+        "jaro_bitpar: inputs must be ASCII ≤ 64 bytes (got a={} bytes ascii={}, b={} bytes ascii={})",
+        a.len(), a.is_ascii(), b.len(), b.is_ascii()
+    );
     let (m, n) = (a.len(), b.len());
     if m == 0 && n == 0 {
         return 1.0;
@@ -703,7 +712,11 @@ pub fn jaro_bitpar(a: &[u8], b: &[u8]) -> f64 {
 /// the Iris Xe-class CPUs this targets). Transpositions and scoring run in a
 /// short scalar tail per lane.
 pub fn jaro_4way(a: &[u8], texts: [&[u8]; 4]) -> [f64; 4] {
-    debug_assert!(a.len() <= 64 && a.is_ascii());
+    assert!(
+        a.len() <= 64 && a.is_ascii(),
+        "jaro_4way: first argument must be ASCII ≤ 64 bytes (got {} bytes, ascii={})",
+        a.len(), a.is_ascii()
+    );
     debug_assert!(texts.iter().all(|t| t.len() <= 64 && t.is_ascii()));
     #[cfg(target_arch = "x86_64")]
     {

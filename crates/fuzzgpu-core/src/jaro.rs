@@ -357,7 +357,9 @@ pub mod gpu_ext {
             let engine = GpuEngine::get()?;
             let kernel = Self::new_inner(engine)?;
             let _ = GLOBAL_GPU_JARO_KERNEL.set(kernel);
-            Ok(GLOBAL_GPU_JARO_KERNEL.get().unwrap())
+            GLOBAL_GPU_JARO_KERNEL.get().ok_or_else(|| FuzzGpuError::NoDevice(
+                "Jaro kernel unexpectedly absent after init".into()
+            ))
         }
 
         fn new_inner(engine: std::sync::Arc<GpuEngine>) -> Result<Self> {

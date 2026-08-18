@@ -2,11 +2,11 @@
 from .. import fuzzgpu as _native
 
 
-def similarity(s1, s2, *, processor=None, score_cutoff=0.0):
+def similarity(s1, s2, *, processor=None, score_cutoff=None):
     if processor:
         s1, s2 = processor(s1), processor(s2)
     value = _native.jaro_similarity(s1, s2)
-    return value if value >= score_cutoff else 0.0
+    return value if score_cutoff is None or value >= score_cutoff else 0.0
 
 
 def distance(s1, s2, *, processor=None, score_cutoff=None):
@@ -16,7 +16,7 @@ def distance(s1, s2, *, processor=None, score_cutoff=None):
     return value if score_cutoff is None or value <= score_cutoff else 1.0
 
 
-def normalized_similarity(s1, s2, *, processor=None, score_cutoff=0.0):
+def normalized_similarity(s1, s2, *, processor=None, score_cutoff=None):
     return similarity(s1, s2, processor=processor, score_cutoff=score_cutoff)
 
 

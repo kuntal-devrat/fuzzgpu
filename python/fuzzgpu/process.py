@@ -175,8 +175,12 @@ def cdist(
     choices = list(choices)
 
     # ── Fast path: native ratio scorer, no per-string processor ──────────
-    # Route through the accelerated Rust matrix kernel.  The result is in
-    # 0–100 float, matching what the slow path would produce.
+    # Route through the accelerated Rust fuzz_ratio_batch for each query row.
+    # Each row call releases the GIL and runs under Rayon, so the Python loop
+    # here only pays per-query overhead — not per-cell. This is still correct
+    # behaviour for `workers`: Rayon uses all cores inside each row call, so
+    # `workers` is ignored at the Python level (it would just add Python thread
+    # overhead on top of Rayon's own parallelism).
     if (
         _is_native_ratio(scorer)
         and processor is None
@@ -185,15 +189,14 @@ def cdist(
     ):
         try:
             from . import fuzzgpu as _native
-            # Apply score_cutoff: cells below threshold become 0.0 (same
-            # behaviour as the per-cell slow path with score_cutoff set).
-            raw: list[list[float]] = _native.fuzz_ratio_batch  # type hint only
-            matrix: list[list[float]] = []
-            for q in queries:
-                row = _native.fuzz_ratio_batch(q, choices)
-                if score_cutoff is not None:
-                    row = [v if v >= score_cutoff else 0.0 for v in row]
-                matrix.append(row)
+            matrix: list[list[float]] = [
+                _native.fuzz_ratio_batch(q, choices) for q in queries
+            ]
+            if score_cutoff is not None:
+                matrix = [
+                    [v if v >= score_cutoff else 0.0 for v in row]
+                    for row in matrix
+                ]
             if dtype is not None:
                 try:
                     import numpy as np
@@ -201,9 +204,13 @@ def cdist(
                 except ImportError:
                     pass
             return matrix
-        except Exception:
-            # Fall through to the generic path on any unexpected error.
-            pass
+        except Exception as exc:
+            import warnings
+            warnings.warn(
+                f"fuzzgpu cdist fast path failed ({exc!r}), falling back to per-cell scorer",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     # ── Generic path ─────────────────────────────────────────────────────
     def row(query):
