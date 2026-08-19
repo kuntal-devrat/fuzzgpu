@@ -16,9 +16,8 @@
 //! GPU tests skip cleanly when no device is available.
 
 use fuzzgpu_core::{
-    damerau_levenshtein_distance, jaro, jaro_optimized, jaro_winkler,
-    levenshtein_distance_raw, levenshtein_myers, needleman_wunsch, needleman_wunsch_affine,
-    needleman_wunsch_striped,
+    damerau_levenshtein_distance, jaro, jaro_optimized, jaro_winkler, levenshtein_distance_raw,
+    levenshtein_myers, needleman_wunsch, needleman_wunsch_affine, needleman_wunsch_striped,
 };
 use proptest::prelude::*;
 
@@ -90,6 +89,7 @@ fn naive_levenshtein<T: PartialEq>(a: &[T], b: &[T]) -> u32 {
     prev[n]
 }
 
+#[allow(clippy::needless_range_loop)]
 /// Naive full-matrix Needleman-Wunsch (linear gap penalty), used as an oracle.
 fn naive_needleman_wunsch<T: PartialEq>(
     a: &[T],
@@ -108,7 +108,11 @@ fn naive_needleman_wunsch<T: PartialEq>(
     }
     for i in 1..=m {
         for j in 1..=n {
-            let score = if a[i - 1] == b[j - 1] { match_score } else { mismatch_score };
+            let score = if a[i - 1] == b[j - 1] {
+                match_score
+            } else {
+                mismatch_score
+            };
             dp[i][j] = (dp[i - 1][j - 1] + score)
                 .max(dp[i - 1][j] + gap)
                 .max(dp[i][j - 1] + gap);
@@ -133,10 +137,18 @@ fn naive_needleman_wunsch_affine<T: PartialEq>(
     const NEG_INF: i64 = -1_000_000_000_000_000_000;
 
     let (m, n) = (a.len(), b.len());
-    if m == 0 && n == 0 { return 0; }
-    if m == 0 { return gap_open + (n as i64) * gap_extend; }
-    if n == 0 { return gap_open + (m as i64) * gap_extend; }
-    if a == b { return (m as i64) * match_score; }
+    if m == 0 && n == 0 {
+        return 0;
+    }
+    if m == 0 {
+        return gap_open + (n as i64) * gap_extend;
+    }
+    if n == 0 {
+        return gap_open + (m as i64) * gap_extend;
+    }
+    if a == b {
+        return (m as i64) * match_score;
+    }
 
     let mut mtx = vec![vec![NEG_INF; n + 1]; m + 1];
     let mut ix = vec![vec![NEG_INF; n + 1]; m + 1];
@@ -157,8 +169,15 @@ fn naive_needleman_wunsch_affine<T: PartialEq>(
 
     for i in 1..=m {
         for j in 1..=n {
-            let score = if a[i - 1] == b[j - 1] { match_score } else { mismatch_score };
-            mtx[i][j] = mtx[i - 1][j - 1].max(ix[i - 1][j - 1]).max(iy[i - 1][j - 1]) + score;
+            let score = if a[i - 1] == b[j - 1] {
+                match_score
+            } else {
+                mismatch_score
+            };
+            mtx[i][j] = mtx[i - 1][j - 1]
+                .max(ix[i - 1][j - 1])
+                .max(iy[i - 1][j - 1])
+                + score;
             ix[i][j] = (ix[i - 1][j] + gap_extend)
                 .max(mtx[i - 1][j] + gap_open + gap_extend)
                 .max(iy[i - 1][j] + gap_open + gap_extend);
@@ -504,7 +523,6 @@ proptest! {
 #[cfg(feature = "gpu")]
 mod gpu_differential {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
     use fuzzgpu_core::damerau::damerau_levenshtein_cdist;
     use fuzzgpu_core::damerau::gpu_ext::GpuDamerauKernel;
     use fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel;
@@ -512,6 +530,7 @@ mod gpu_differential {
     use fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel;
     use fuzzgpu_core::levenshtein::levenshtein_cdist_cpu;
     use fuzzgpu_core::needleman::gpu_ext::GpuNeedlemanAffineKernel;
+    use std::sync::{Mutex, MutexGuard};
 
     /// Serializes GPU access across the differential tests. The lib suite's
     /// equivalent (`gpu::GPU_TEST_DISPATCH_LOCK`) is `#[cfg(test)]`-only and
@@ -521,7 +540,9 @@ mod gpu_differential {
     static GPU_TEST_DISPATCH_LOCK: Mutex<()> = Mutex::new(());
 
     fn gpu_test_lock() -> MutexGuard<'static, ()> {
-        GPU_TEST_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        GPU_TEST_DISPATCH_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// When `FUZZGPU_REQUIRE_GPU` is set (CI with a software Vulkan adapter),
@@ -598,9 +619,21 @@ mod gpu_differential {
 
     /// GPU computes in f32, CPU in f64 — compare with epsilon.
     fn assert_close(a: &[f64], b: &[f64]) {
-        assert_eq!(a.len(), b.len(), "length mismatch: {} vs {}", a.len(), b.len());
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "length mismatch: {} vs {}",
+            a.len(),
+            b.len()
+        );
         for (i, (x, y)) in a.iter().zip(b).enumerate() {
-            assert!((x - y).abs() < 1e-4, "GPU Jaro result {} differs: {} vs {}", i, x, y);
+            assert!(
+                (x - y).abs() < 1e-4,
+                "GPU Jaro result {} differs: {} vs {}",
+                i,
+                x,
+                y
+            );
         }
     }
 
@@ -812,17 +845,23 @@ mod gpu_differential {
     #[test]
     fn needleman_affine_gpu_wavefront_matches_cpu() {
         let _gpu_guard = gpu_test_lock();
-        let Some(kernel) = gpu_needleman_affine_or_skip() else { return; };
+        let Some(kernel) = gpu_needleman_affine_or_skip() else {
+            return;
+        };
 
         fn gen_long(count: usize, seed: u64) -> Vec<String> {
             let mut state = seed;
             let mut out = Vec::with_capacity(count);
             for _ in 0..count {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 let len = 70 + ((state >> 33) as usize % 31); // 70..=100
                 let mut s = String::with_capacity(len);
                 for _ in 0..len {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
                 }
                 out.push(s);
@@ -842,22 +881,42 @@ mod gpu_differential {
         pairs.push(("x".repeat(64), "y".repeat(64)));
         pairs.push(("x".repeat(65), "y".repeat(65)));
         pairs.push(("é".repeat(80), "è".repeat(80)));
-        let refs: Vec<(&str, &str)> =
-            pairs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let refs: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
         let indices: Vec<usize> = (0..refs.len()).collect();
 
         let gpu = kernel
-            .compute_gpu_wavefront(&refs, &indices, match_score, mismatch_score, gap_open, gap_extend)
+            .compute_gpu_wavefront(
+                &refs,
+                &indices,
+                match_score,
+                mismatch_score,
+                gap_open,
+                gap_extend,
+            )
             .expect("GPU wavefront dispatch should succeed");
-        let cpu: Vec<i64> = refs.iter()
+        let cpu: Vec<i64> = refs
+            .iter()
             .map(|(a, b)| {
                 let ca: Vec<char> = a.chars().collect();
                 let cb: Vec<char> = b.chars().collect();
-                naive_needleman_wunsch_affine(&ca, &cb, match_score, mismatch_score, gap_open, gap_extend)
+                naive_needleman_wunsch_affine(
+                    &ca,
+                    &cb,
+                    match_score,
+                    mismatch_score,
+                    gap_open,
+                    gap_extend,
+                )
             })
             .collect();
         let gpu_i64: Vec<i64> = gpu.iter().map(|&s| s as i64).collect();
-        assert_eq!(gpu_i64, cpu, "GPU wavefront must match the CPU Gotoh oracle");
+        assert_eq!(
+            gpu_i64, cpu,
+            "GPU wavefront must match the CPU Gotoh oracle"
+        );
     }
 
     /// Transposition-heavy edge cases must be bit-exact through the GPU
@@ -867,8 +926,11 @@ mod gpu_differential {
     /// randomness, fast.)
     #[test]
     fn damerau_gpu_transposition_edges_match_cpu() {
-        let _gpu_guard = gpu_test_lock();            let Some(kernel) = gpu_damerau_or_skip() else { return; };
-            let _force = force_gpu();
+        let _gpu_guard = gpu_test_lock();
+        let Some(kernel) = gpu_damerau_or_skip() else {
+            return;
+        };
+        let _force = force_gpu();
 
         let pairs: Vec<(&str, &str)> = vec![
             ("", ""),
@@ -886,8 +948,11 @@ mod gpu_differential {
             ("abcdef", "abcfed"),
             ("abcdefgh", "abghefcd"),
         ];
-        let gpu = kernel.compute_batch(&pairs).expect("GPU Damerau batch should succeed");
-        let cpu: Vec<u32> = pairs.iter()
+        let gpu = kernel
+            .compute_batch(&pairs)
+            .expect("GPU Damerau batch should succeed");
+        let cpu: Vec<u32> = pairs
+            .iter()
             .map(|(a, b)| damerau_levenshtein_distance(a, b))
             .collect();
         assert_eq!(gpu, cpu, "GPU Damerau transposition edges must match CPU");
@@ -898,7 +963,9 @@ mod gpu_differential {
     #[test]
     fn jaro_gpu_classic_cases_match_cpu() {
         let _gpu_guard = gpu_test_lock();
-        let Some(kernel) = gpu_jaro_or_skip() else { return; };
+        let Some(kernel) = gpu_jaro_or_skip() else {
+            return;
+        };
         let _force = force_gpu();
 
         let pairs: Vec<(&str, &str)> = vec![
@@ -914,10 +981,10 @@ mod gpu_differential {
             ("", "xyz"),
             ("abcdef", "abcfed"),
         ];
-        let gpu = kernel.compute_batch(&pairs, 0.1).expect("GPU Jaro batch should succeed");
-        let cpu: Vec<f64> = pairs.iter()
-            .map(|(a, b)| jaro_winkler(a, b, 0.1))
-            .collect();
+        let gpu = kernel
+            .compute_batch(&pairs, 0.1)
+            .expect("GPU Jaro batch should succeed");
+        let cpu: Vec<f64> = pairs.iter().map(|(a, b)| jaro_winkler(a, b, 0.1)).collect();
         assert_close(&gpu, &cpu);
     }
 
@@ -941,7 +1008,9 @@ mod gpu_differential {
                 let len = 4 + ((state >> 33) % 16) as usize;
                 let mut s = String::with_capacity(len);
                 for _ in 0..len {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
                 }
                 out.push(s);
@@ -951,8 +1020,11 @@ mod gpu_differential {
 
         let a = gen(600, 0x1111);
         let b = gen(600, 0x2222);
-        let mut op1: Vec<(&str, &str)> =
-            a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+        let mut op1: Vec<(&str, &str)> = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x.as_str(), y.as_str()))
+            .collect();
         op1[0] = ("", "");
         op1[1] = ("", "xyz");
         op1[2] = ("identical", "identical");
@@ -1003,7 +1075,10 @@ mod gpu_differential {
             for (i, (g, e)) in got.iter().zip(&expected).enumerate() {
                 assert_eq!(g.len(), e.len(), "jaro op {i} length");
                 for (j, (&gv, &ev)) in g.iter().zip(e).enumerate() {
-                    assert!((gv - ev).abs() < 1e-4, "jaro op {i} pair {j}: batch {gv} vs compute {ev}");
+                    assert!(
+                        (gv - ev).abs() < 1e-4,
+                        "jaro op {i} pair {j}: batch {gv} vs compute {ev}"
+                    );
                 }
             }
         }
@@ -1012,9 +1087,15 @@ mod gpu_differential {
         if let Some(kernel) = gpu_needleman_affine_or_skip() {
             let (m, mm, go, ge) = (2i64, -1i64, -3i64, -1i64);
             let expected = vec![
-                kernel.compute_batch(&op1, m, mm, go, ge).expect("op1 affine"),
-                kernel.compute_batch(&op2, m, mm, go, ge).expect("op2 affine"),
-                kernel.compute_batch(&op3, m, mm, go, ge).expect("op3 affine"),
+                kernel
+                    .compute_batch(&op1, m, mm, go, ge)
+                    .expect("op1 affine"),
+                kernel
+                    .compute_batch(&op2, m, mm, go, ge)
+                    .expect("op2 affine"),
+                kernel
+                    .compute_batch(&op3, m, mm, go, ge)
+                    .expect("op3 affine"),
             ];
             let mut batch = kernel.batch(m, mm, go, ge);
             batch.add(&op1);

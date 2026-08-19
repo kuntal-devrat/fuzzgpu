@@ -3,14 +3,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use thiserror::Error;
 
-#[cfg(test)]
 use std::cell::Cell;
 
 // Test-only fault injection state, thread-local so only the arming test
 // thread is affected (tests run in parallel and share the global engine).
 // See docs/GPU_TESTING.md for how to use these hooks and the conventions
 // every GPU test must follow.
-#[cfg(test)]
 thread_local! {
     static TEST_INJECT_READBACK_TIMEOUT: Cell<bool> = const { Cell::new(false) };
     static TEST_INJECT_SMALL_BUFFER: Cell<bool> = const { Cell::new(false) };
@@ -21,8 +19,7 @@ thread_local! {
 /// missing device is a hard failure instead. CI sets this on runners that
 /// install a (software) Vulkan adapter so the GPU paths are genuinely
 /// exercised on every push rather than silently skipped.
-#[cfg(test)]
-pub(crate) fn require_gpu() -> bool {
+pub fn require_gpu() -> bool {
     std::env::var("FUZZGPU_REQUIRE_GPU")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
@@ -45,53 +42,50 @@ pub(crate) fn dispatch_lock_bypass() -> bool {
 ///
 /// Setting `FUZZGPU_SKIP_DISPATCH_LOCK=1` bypasses the workaround so the
 /// underlying crash can be reproduced / bisected in CI or locally.
-#[cfg(test)]
-pub(crate) fn gpu_test_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
+pub fn gpu_test_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
     if dispatch_lock_bypass() {
         return None;
     }
-    Some(GPU_TEST_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+    Some(
+        GPU_TEST_DISPATCH_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+    )
 }
 
 /// Arm the readback-timeout fault on the current thread: `map_async`
 /// registrations are skipped (so no poll on *any* thread can complete the
 /// mapping) and the readback deterministically fails with
 /// `FuzzGpuError::Timeout` via `recv_timeout`.
-#[cfg(test)]
-pub(crate) fn arm_readback_timeout_fault() {
+pub fn arm_readback_timeout_fault() {
     TEST_INJECT_READBACK_TIMEOUT.with(|c| c.set(true));
 }
 
 /// Disarm the readback-timeout fault on the current thread.
-#[cfg(test)]
-pub(crate) fn disarm_readback_timeout_fault() {
+pub fn disarm_readback_timeout_fault() {
     TEST_INJECT_READBACK_TIMEOUT.with(|c| c.set(false));
 }
 
 /// Arm the small-buffer fault on the current thread: the effective max buffer
 /// size shrinks so any real input trips the `FuzzGpuError::BufferError` branch.
-#[cfg(test)]
-pub(crate) fn arm_small_buffer_fault() {
+pub fn arm_small_buffer_fault() {
     TEST_INJECT_SMALL_BUFFER.with(|c| c.set(true));
 }
 
 /// Disarm the small-buffer fault on the current thread.
-#[cfg(test)]
-pub(crate) fn disarm_small_buffer_fault() {
+pub fn disarm_small_buffer_fault() {
     TEST_INJECT_SMALL_BUFFER.with(|c| c.set(false));
 }
 
 /// Arm the shader-error fault on the current thread: kernel initialization
 /// compiles deliberately invalid WGSL so shader validation fails and surfaces
 /// as `FuzzGpuError::ShaderError` instead of a panic.
-#[cfg(test)]
-pub(crate) fn arm_shader_error_fault() {
+pub fn arm_shader_error_fault() {
     TEST_INJECT_SHADER_ERROR.with(|c| c.set(true));
 }
 
 /// Disarm the shader-error fault on the current thread.
-#[cfg(test)]
-pub(crate) fn disarm_shader_error_fault() {
+pub fn disarm_shader_error_fault() {
     TEST_INJECT_SHADER_ERROR.with(|c| c.set(false));
 }
 
@@ -99,7 +93,6 @@ pub(crate) fn disarm_shader_error_fault() {
 /// shader-error fault substitutes deliberately invalid WGSL to exercise shader
 /// validation errors; in production this is a pass-through.
 pub(crate) fn effective_shader_source(real: &'static str) -> std::borrow::Cow<'static, str> {
-    #[cfg(test)]
     if TEST_INJECT_SHADER_ERROR.with(|c| c.get()) {
         return std::borrow::Cow::Owned("this is deliberately invalid wgsl !!!".into());
     }
@@ -121,8 +114,7 @@ pub(crate) fn effective_shader_source(real: &'static str) -> std::borrow::Cow<'s
 ///
 /// Setting `FUZZGPU_SKIP_DISPATCH_LOCK=1` bypasses the workaround so the
 /// underlying crash can be reproduced / bisected in CI or locally.
-#[cfg(test)]
-pub(crate) static GPU_TEST_DISPATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub static GPU_TEST_DISPATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Serializes tests that mutate `GPU_THRESHOLD_OVERRIDE`.
 ///
@@ -131,17 +123,14 @@ pub(crate) static GPU_TEST_DISPATCH_LOCK: std::sync::Mutex<()> = std::sync::Mute
 /// reset the threshold before the test that set it has finished dispatching.
 /// This mutex ensures only one test at a time holds an active threshold
 /// override. It is completely independent of `GPU_TEST_DISPATCH_LOCK`.
-#[cfg(test)]
-pub(crate) static GPU_THRESHOLD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub static GPU_THRESHOLD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Acquire the threshold-override test lock and set the GPU dispatch threshold
 /// to `threshold`. Returns a RAII guard that resets the threshold to `None`
 /// and releases the lock on drop. Call this instead of constructing `ForceGpu`
 /// directly.
-#[cfg(test)]
-pub(crate) fn force_gpu_threshold(
-    threshold: usize,
-) -> impl Drop {
+pub fn force_gpu_threshold(threshold: usize) -> impl Drop {
+    #[allow(dead_code)] // field accessed by Drop impl of ThresholdGuard
     struct ThresholdGuard(std::sync::MutexGuard<'static, ()>);
     impl Drop for ThresholdGuard {
         fn drop(&mut self) {
@@ -321,12 +310,16 @@ impl GpuEngine {
     /// a weak CPU — may want to force GPU routing below the auto threshold, or
     /// force CPU routing on a software renderer.
     pub fn set_gpu_threshold(threshold: Option<usize>) {
-        *GPU_THRESHOLD_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = threshold;
+        *GPU_THRESHOLD_OVERRIDE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = threshold;
     }
 
     /// The user-supplied threshold override, if any.
     pub fn gpu_threshold_override() -> Option<usize> {
-        *GPU_THRESHOLD_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner())
+        *GPU_THRESHOLD_OVERRIDE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// The auto-selected GPU dispatch threshold for a *hypothetical* adapter
@@ -375,8 +368,9 @@ impl GpuEngine {
             None => match self.info.device_type.as_str() {
                 // dGPU: auto threshold (64) × factor, e.g. 16 → 1024 pairs for
                 // Jaro, 32 → 2048 for Damerau.
-                "DiscreteGpu" => Self::auto_gpu_threshold("DiscreteGpu")
-                    .saturating_mul(discrete_factor),
+                "DiscreteGpu" => {
+                    Self::auto_gpu_threshold("DiscreteGpu").saturating_mul(discrete_factor)
+                }
                 // Integrated, virtual/software, CPU, unknown: never auto-route
                 // these kernels (CPU SIMD wins at every measured scale).
                 _ => usize::MAX,
@@ -408,7 +402,10 @@ impl GpuEngine {
     /// GPU-eligible call. Lets callers confirm a "GPU mode" call actually
     /// dispatched to the GPU (it is *not* silently CPU-routed).
     pub fn last_routing() -> (usize, usize) {
-        (LAST_ROUTING_GPU.load(Ordering::Relaxed), LAST_ROUTING_CPU.load(Ordering::Relaxed))
+        (
+            LAST_ROUTING_GPU.load(Ordering::Relaxed),
+            LAST_ROUTING_CPU.load(Ordering::Relaxed),
+        )
     }
 
     /// Submit a finished command encoder to the GPU queue.
@@ -445,18 +442,22 @@ impl GpuEngine {
         // `pop()` resolves to the captured error.
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(label),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(label),
-            layout: Some(layout),
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                module: &module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
         if let Some(err) = pollster::block_on(scope.pop()) {
             return Err(FuzzGpuError::ShaderError(format!(
@@ -516,7 +517,9 @@ impl GpuEngine {
         let staging = pool.get(SLOT_STAGING);
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
-        self.map_readback(&slice, move |r| { let _ = tx.send(r); });
+        self.map_readback(&slice, move |r| {
+            let _ = tx.send(r);
+        });
         self.poll();
         rx.recv_timeout(Self::readback_timeout())
             .map_err(|_| FuzzGpuError::Timeout("GPU readback timed out after 10s".into()))?
@@ -557,7 +560,9 @@ impl GpuEngine {
     /// Get or lazily initialize the singleton GPU engine.
     pub fn get() -> Result<Arc<Self>> {
         if Self::is_cpu_only() {
-            return Err(FuzzGpuError::NoDevice("CPU-only mode is active (FUZZGPU_USE_CPU)".into()));
+            return Err(FuzzGpuError::NoDevice(
+                "CPU-only mode is active (FUZZGPU_USE_CPU)".into(),
+            ));
         }
 
         if let Some(engine) = GLOBAL_ENGINE.get() {
@@ -616,7 +621,8 @@ impl GpuEngine {
 
         // Query adapter limits dynamically rather than hardcoding static limits
         let adapter_limits = adapter.limits();
-        let target_storage_size = (128 * 1024 * 1024).min(adapter_limits.max_storage_buffer_binding_size);
+        let target_storage_size =
+            (128 * 1024 * 1024).min(adapter_limits.max_storage_buffer_binding_size);
         let target_buffer_size = (128 * 1024 * 1024).min(adapter_limits.max_buffer_size);
 
         let required_limits = wgpu::Limits {
@@ -628,25 +634,25 @@ impl GpuEngine {
             // min(adapter, 32 KiB) never exceeds the adapter, so device
             // creation cannot fail from this change; devices below the
             // Damerau budget simply route that kernel to CPU.
-            max_compute_workgroup_storage_size: 32768.min(adapter_limits.max_compute_workgroup_storage_size),
-            max_compute_invocations_per_workgroup: 256.min(adapter_limits.max_compute_invocations_per_workgroup),
+            max_compute_workgroup_storage_size: 32768
+                .min(adapter_limits.max_compute_workgroup_storage_size),
+            max_compute_invocations_per_workgroup: 256
+                .min(adapter_limits.max_compute_invocations_per_workgroup),
             ..Default::default()
         };
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("fuzzgpu device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits,
-                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                    // Explicit rather than `Default::default()`: `Performance` is the
-                    // default variant, but stating it makes the intent (prefer
-                    // throughput over memory footprint) unambiguous.
-                    memory_hints: wgpu::MemoryHints::Performance,
-                    trace: wgpu::Trace::Off,
-                },
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("fuzzgpu device"),
+                required_features: wgpu::Features::empty(),
+                required_limits,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                // Explicit rather than `Default::default()`: `Performance` is the
+                // default variant, but stating it makes the intent (prefer
+                // throughput over memory footprint) unambiguous.
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            })
             .await
             .map_err(|e| FuzzGpuError::NoDevice(format!("Failed to create GPU device: {}", e)))?;
 
@@ -682,9 +688,15 @@ mod tests {
         match GpuEngine::get() {
             Ok(engine) => {
                 assert!(!engine.info.name.is_empty(), "GPU name must be populated");
-                assert!(!engine.info.backend.is_empty(), "GPU backend must be populated");
+                assert!(
+                    !engine.info.backend.is_empty(),
+                    "GPU backend must be populated"
+                );
                 assert!(engine.max_buffer_size > 0, "max_buffer_size must be > 0");
-                assert!(engine.max_storage_buffer_binding_size > 0, "max_storage_buffer_binding_size must be > 0");
+                assert!(
+                    engine.max_storage_buffer_binding_size > 0,
+                    "max_storage_buffer_binding_size must be > 0"
+                );
                 assert!(engine.max_storage_buffer_binding_size as u64 <= engine.max_buffer_size);
             }
             Err(e) => {
@@ -769,5 +781,57 @@ mod tests {
             }
             Err(_) => eprintln!("  WARP  <not available>"),
         }
+    }
+
+    /// effective_shader_source forwards the real WGSL in production mode and
+    /// returns deliberately invalid WGSL only when the fault-injection hook is
+    /// armed on the current thread.
+    #[test]
+    fn test_effective_shader_source_returns_real_by_default() {
+        let real = "struct Foo { x: f32 }";
+        let got = effective_shader_source(real);
+        assert!(
+            got.contains("Foo"),
+            "real shader source must be forwarded unchanged"
+        );
+    }
+
+    #[test]
+    fn test_effective_shader_source_returns_invalid_when_fault_armed() {
+        arm_shader_error_fault();
+        let real = "struct Foo { x: f32 }";
+        let got = effective_shader_source(real);
+        assert!(
+            got.contains("invalid") || got.contains("deliberately"),
+            "armed fault must substitute invalid WGSL, got: {got:?}"
+        );
+        disarm_shader_error_fault();
+    }
+
+    /// dispatch_lock_bypass must read FUZZGPU_SKIP_DISPATCH_LOCK and return
+    /// true only when it is set to '1' or 'true' (case-insensitive).
+    #[test]
+    fn test_dispatch_lock_bypass_default_is_false() {
+        std::env::remove_var("FUZZGPU_SKIP_DISPATCH_LOCK");
+        assert!(!dispatch_lock_bypass());
+    }
+
+    /// force_gpu_threshold sets the override and its Drop resets to None.
+    #[test]
+    fn test_force_gpu_threshold_sets_override() {
+        let _gpu = gpu_test_lock();
+        GpuEngine::set_cpu_only(false);
+        // Acquire the threshold lock (re-entrant-safe: separate Mutex from dispatch lock).
+        let _thr = GPU_THRESHOLD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        GpuEngine::set_gpu_threshold(Some(42));
+        assert_eq!(
+            GpuEngine::gpu_threshold_override(),
+            Some(42),
+            "override must reflect the value just set"
+        );
+        GpuEngine::set_gpu_threshold(None);
+        assert_eq!(GpuEngine::gpu_threshold_override(), None);
     }
 }

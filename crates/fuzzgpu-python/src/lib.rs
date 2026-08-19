@@ -71,7 +71,9 @@ fn str_refs<'a>(bounds: &'a [Bound<'_, PyString>]) -> PyResult<Vec<&'a str>> {
 
 /// `try_readwrite` fails (not panics) on read-only or concurrently borrowed
 /// arrays; surface that as a clear `BufferError`.
-fn readwrite_or_err<'py, T, D>(arr: &Bound<'py, numpy::PyArray<T, D>>) -> PyResult<numpy::PyReadwriteArray<'py, T, D>>
+fn readwrite_or_err<'py, T, D>(
+    arr: &Bound<'py, numpy::PyArray<T, D>>,
+) -> PyResult<numpy::PyReadwriteArray<'py, T, D>>
 where
     T: numpy::Element,
     D: numpy::ndarray::Dimension,
@@ -87,7 +89,10 @@ where
 /// Validate `out` as a writable numpy `uint32` array of exactly `expected`
 /// elements (1-D). Fails fast — before any compute — on wrong length,
 /// wrong dtype, or a read-only array.
-fn checked_u32_array1<'py>(out: &Bound<'py, PyAny>, expected: usize) -> PyResult<numpy::PyReadwriteArray1<'py, u32>> {
+fn checked_u32_array1<'py>(
+    out: &Bound<'py, PyAny>,
+    expected: usize,
+) -> PyResult<numpy::PyReadwriteArray1<'py, u32>> {
     use numpy::{PyArray1, PyUntypedArrayMethods};
     let arr = out.downcast::<PyArray1<u32>>()?;
     let rw = readwrite_or_err(arr)?;
@@ -103,7 +108,10 @@ fn checked_u32_array1<'py>(out: &Bound<'py, PyAny>, expected: usize) -> PyResult
 
 /// Validate `out` as a writable numpy `float64` array of exactly `expected`
 /// elements (1-D).
-fn checked_f64_array1<'py>(out: &Bound<'py, PyAny>, expected: usize) -> PyResult<numpy::PyReadwriteArray1<'py, f64>> {
+fn checked_f64_array1<'py>(
+    out: &Bound<'py, PyAny>,
+    expected: usize,
+) -> PyResult<numpy::PyReadwriteArray1<'py, f64>> {
     use numpy::{PyArray1, PyUntypedArrayMethods};
     let arr = out.downcast::<PyArray1<f64>>()?;
     let rw = readwrite_or_err(arr)?;
@@ -119,7 +127,11 @@ fn checked_f64_array1<'py>(out: &Bound<'py, PyAny>, expected: usize) -> PyResult
 
 /// Validate `out` as a writable numpy `uint32` array of shape `(rows, cols)`
 /// (2-D, row-major / C-contiguous) for cross-product matrices.
-fn checked_u32_array2<'py>(out: &Bound<'py, PyAny>, rows: usize, cols: usize) -> PyResult<numpy::PyReadwriteArray2<'py, u32>> {
+fn checked_u32_array2<'py>(
+    out: &Bound<'py, PyAny>,
+    rows: usize,
+    cols: usize,
+) -> PyResult<numpy::PyReadwriteArray2<'py, u32>> {
     use numpy::{PyArray2, PyUntypedArrayMethods};
     let arr = out.downcast::<PyArray2<u32>>()?;
     let rw = readwrite_or_err(arr)?;
@@ -134,7 +146,11 @@ fn checked_u32_array2<'py>(out: &Bound<'py, PyAny>, rows: usize, cols: usize) ->
 
 /// Validate `out` as a writable numpy `float64` array of shape `(rows, cols)`
 /// (2-D, row-major / C-contiguous) for cross-product matrices.
-fn checked_f64_array2<'py>(out: &Bound<'py, PyAny>, rows: usize, cols: usize) -> PyResult<numpy::PyReadwriteArray2<'py, f64>> {
+fn checked_f64_array2<'py>(
+    out: &Bound<'py, PyAny>,
+    rows: usize,
+    cols: usize,
+) -> PyResult<numpy::PyReadwriteArray2<'py, f64>> {
     use numpy::{PyArray2, PyUntypedArrayMethods};
     let arr = out.downcast::<PyArray2<f64>>()?;
     let rw = readwrite_or_err(arr)?;
@@ -149,7 +165,10 @@ fn checked_f64_array2<'py>(out: &Bound<'py, PyAny>, rows: usize, cols: usize) ->
 
 /// Copy `values` into a validated 1-D `u32` view (GIL held; the view keeps
 /// the numpy array alive and pinned).
-fn write_u32_array1(mut rw: numpy::PyReadwriteArray1<'_, u32>, values: impl IntoIterator<Item = u32>) -> PyResult<()> {
+fn write_u32_array1(
+    mut rw: numpy::PyReadwriteArray1<'_, u32>,
+    values: impl IntoIterator<Item = u32>,
+) -> PyResult<()> {
     let slice = rw
         .as_slice_mut()
         .map_err(|_| pyo3::exceptions::PyBufferError::new_err("out must be C-contiguous"))?;
@@ -160,7 +179,10 @@ fn write_u32_array1(mut rw: numpy::PyReadwriteArray1<'_, u32>, values: impl Into
 }
 
 /// Copy `values` (row-major) into a validated 2-D `u32` view.
-fn write_u32_array2(mut rw: numpy::PyReadwriteArray2<'_, u32>, values: impl IntoIterator<Item = u32>) -> PyResult<()> {
+fn write_u32_array2(
+    mut rw: numpy::PyReadwriteArray2<'_, u32>,
+    values: impl IntoIterator<Item = u32>,
+) -> PyResult<()> {
     let slice = rw
         .as_slice_mut()
         .map_err(|_| pyo3::exceptions::PyBufferError::new_err("out must be C-contiguous"))?;
@@ -171,7 +193,10 @@ fn write_u32_array2(mut rw: numpy::PyReadwriteArray2<'_, u32>, values: impl Into
 }
 
 /// Copy `values` into a validated 1-D `f64` view.
-fn write_f64_array1(mut rw: numpy::PyReadwriteArray1<'_, f64>, values: impl IntoIterator<Item = f64>) -> PyResult<()> {
+fn write_f64_array1(
+    mut rw: numpy::PyReadwriteArray1<'_, f64>,
+    values: impl IntoIterator<Item = f64>,
+) -> PyResult<()> {
     let slice = rw
         .as_slice_mut()
         .map_err(|_| pyo3::exceptions::PyBufferError::new_err("out must be C-contiguous"))?;
@@ -182,7 +207,10 @@ fn write_f64_array1(mut rw: numpy::PyReadwriteArray1<'_, f64>, values: impl Into
 }
 
 /// Copy `values` (row-major) into a validated 2-D `f64` view.
-fn write_f64_array2(mut rw: numpy::PyReadwriteArray2<'_, f64>, values: impl IntoIterator<Item = f64>) -> PyResult<()> {
+fn write_f64_array2(
+    mut rw: numpy::PyReadwriteArray2<'_, f64>,
+    values: impl IntoIterator<Item = f64>,
+) -> PyResult<()> {
     let slice = rw
         .as_slice_mut()
         .map_err(|_| pyo3::exceptions::PyBufferError::new_err("out must be C-contiguous"))?;
@@ -245,7 +273,11 @@ fn levenshtein_batch(py: Python, query: &str, candidates: &Bound<'_, PyAny>) -> 
 }
 
 /// Shared compute for `levenshtein_cdist` / `levenshtein_cdist_into`.
-fn levenshtein_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str]) -> PyResult<Vec<Vec<u32>>> {
+fn levenshtein_cdist_core(
+    py: Python<'_>,
+    refs_a: &[&str],
+    refs_b: &[&str],
+) -> PyResult<Vec<Vec<u32>>> {
     #[cfg(feature = "gpu")]
     {
         if !GpuEngine::is_cpu_only() {
@@ -267,12 +299,20 @@ fn levenshtein_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str]) -> P
             }
         }
     }
-    py.allow_threads(|| Ok(fuzzgpu_core::levenshtein::levenshtein_cdist_cpu(refs_a, refs_b)))
+    py.allow_threads(|| {
+        Ok(fuzzgpu_core::levenshtein::levenshtein_cdist_cpu(
+            refs_a, refs_b,
+        ))
+    })
 }
 
 #[pyfunction]
 #[pyo3(text_signature = "(list_a, list_b, /)")]
-fn levenshtein_cdist(py: Python, list_a: &Bound<'_, PyAny>, list_b: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<u32>>> {
+fn levenshtein_cdist(
+    py: Python,
+    list_a: &Bound<'_, PyAny>,
+    list_b: &Bound<'_, PyAny>,
+) -> PyResult<Vec<Vec<u32>>> {
     let refs_a = borrow_strs(list_a)?;
     let refs_b = borrow_strs(list_b)?;
     let refs_a = str_refs(&refs_a)?;
@@ -286,7 +326,12 @@ fn levenshtein_cdist(py: Python, list_a: &Bound<'_, PyAny>, list_b: &Bound<'_, P
 /// `len(candidates)` elements and is validated before any compute.
 #[pyfunction]
 #[pyo3(text_signature = "(query, candidates, out, /)")]
-fn levenshtein_batch_into(py: Python<'_>, query: &str, candidates: &Bound<'_, PyAny>, out: &Bound<'_, PyAny>) -> PyResult<()> {
+fn levenshtein_batch_into(
+    py: Python<'_>,
+    query: &str,
+    candidates: &Bound<'_, PyAny>,
+    out: &Bound<'_, PyAny>,
+) -> PyResult<()> {
     let cands = borrow_strs(candidates)?;
     let cands = str_refs(&cands)?;
     let pairs: Vec<(&str, &str)> = cands.iter().map(|c| (query, *c)).collect();
@@ -299,7 +344,12 @@ fn levenshtein_batch_into(py: Python<'_>, query: &str, candidates: &Bound<'_, Py
 /// `(len(list_a), len(list_b))` buffer of `uint32` (row-major).
 #[pyfunction]
 #[pyo3(text_signature = "(list_a, list_b, out, /)")]
-fn levenshtein_cdist_into(py: Python<'_>, list_a: &Bound<'_, PyAny>, list_b: &Bound<'_, PyAny>, out: &Bound<'_, PyAny>) -> PyResult<()> {
+fn levenshtein_cdist_into(
+    py: Python<'_>,
+    list_a: &Bound<'_, PyAny>,
+    list_b: &Bound<'_, PyAny>,
+    out: &Bound<'_, PyAny>,
+) -> PyResult<()> {
     let refs_a = borrow_strs(list_a)?;
     let refs_b = borrow_strs(list_b)?;
     let refs_a = str_refs(&refs_a)?;
@@ -347,7 +397,11 @@ fn damerau_batch_core(py: Python<'_>, query: &str, cands: &[&str]) -> PyResult<V
 
 #[pyfunction]
 #[pyo3(text_signature = "(query, candidates, /)")]
-fn damerau_levenshtein_batch(py: Python, query: &str, candidates: &Bound<'_, PyAny>) -> PyResult<Vec<u32>> {
+fn damerau_levenshtein_batch(
+    py: Python,
+    query: &str,
+    candidates: &Bound<'_, PyAny>,
+) -> PyResult<Vec<u32>> {
     let refs = borrow_strs(candidates)?;
     let refs = str_refs(&refs)?;
     damerau_batch_core(py, query, &refs)
@@ -381,7 +435,11 @@ fn damerau_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str]) -> PyRes
 
 #[pyfunction]
 #[pyo3(text_signature = "(list_a, list_b, /)")]
-fn damerau_levenshtein_cdist(py: Python, list_a: &Bound<'_, PyAny>, list_b: &Bound<'_, PyAny>) -> PyResult<Vec<Vec<u32>>> {
+fn damerau_levenshtein_cdist(
+    py: Python,
+    list_a: &Bound<'_, PyAny>,
+    list_b: &Bound<'_, PyAny>,
+) -> PyResult<Vec<Vec<u32>>> {
     let refs_a = borrow_strs(list_a)?;
     let refs_b = borrow_strs(list_b)?;
     let refs_a = str_refs(&refs_a)?;
@@ -393,7 +451,12 @@ fn damerau_levenshtein_cdist(py: Python, list_a: &Bound<'_, PyAny>, list_b: &Bou
 /// [`levenshtein_batch_into`]).
 #[pyfunction]
 #[pyo3(text_signature = "(query, candidates, out, /)")]
-fn damerau_levenshtein_batch_into(py: Python<'_>, query: &str, candidates: &Bound<'_, PyAny>, out: &Bound<'_, PyAny>) -> PyResult<()> {
+fn damerau_levenshtein_batch_into(
+    py: Python<'_>,
+    query: &str,
+    candidates: &Bound<'_, PyAny>,
+    out: &Bound<'_, PyAny>,
+) -> PyResult<()> {
     let refs = borrow_strs(candidates)?;
     let refs = str_refs(&refs)?;
     let rw = checked_u32_array1(out, refs.len())?;
@@ -405,7 +468,12 @@ fn damerau_levenshtein_batch_into(py: Python<'_>, query: &str, candidates: &Boun
 /// `(len(list_a), len(list_b))` buffer of `uint32` (row-major).
 #[pyfunction]
 #[pyo3(text_signature = "(list_a, list_b, out, /)")]
-fn damerau_levenshtein_cdist_into(py: Python<'_>, list_a: &Bound<'_, PyAny>, list_b: &Bound<'_, PyAny>, out: &Bound<'_, PyAny>) -> PyResult<()> {
+fn damerau_levenshtein_cdist_into(
+    py: Python<'_>,
+    list_a: &Bound<'_, PyAny>,
+    list_b: &Bound<'_, PyAny>,
+    out: &Bound<'_, PyAny>,
+) -> PyResult<()> {
     let refs_a = borrow_strs(list_a)?;
     let refs_b = borrow_strs(list_b)?;
     let refs_a = str_refs(&refs_a)?;
@@ -425,27 +493,84 @@ fn damerau_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
 
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, match_score, mismatch_score, gap_penalty, /)")]
-fn needleman_wunsch_score(py: Python, a: &str, b: &str, match_score: i64, mismatch_score: i64, gap_penalty: i64) -> PyResult<i64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch(a, b, match_score, mismatch_score, gap_penalty)))
+fn needleman_wunsch_score(
+    py: Python,
+    a: &str,
+    b: &str,
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
+) -> PyResult<i64> {
+    py.allow_threads(|| {
+        Ok(fuzzgpu_core::needleman_wunsch(
+            a,
+            b,
+            match_score,
+            mismatch_score,
+            gap_penalty,
+        ))
+    })
 }
 
 #[pyfunction]
 #[pyo3(text_signature = "(query, candidates, match_score, mismatch_score, gap_penalty, /)")]
-fn needleman_wunsch_batch_fn(py: Python, query: &str, candidates: &Bound<'_, PyAny>, match_score: i64, mismatch_score: i64, gap_penalty: i64) -> PyResult<Vec<i64>> {
+fn needleman_wunsch_batch_fn(
+    py: Python,
+    query: &str,
+    candidates: &Bound<'_, PyAny>,
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
+) -> PyResult<Vec<i64>> {
     let refs = borrow_strs(candidates)?;
     let refs = str_refs(&refs)?;
-    py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch_batch(query, &refs, match_score, mismatch_score, gap_penalty)))
+    py.allow_threads(|| {
+        Ok(fuzzgpu_core::needleman_wunsch_batch(
+            query,
+            &refs,
+            match_score,
+            mismatch_score,
+            gap_penalty,
+        ))
+    })
 }
 
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, match_score, mismatch_score, gap_open, gap_extend, /)")]
-fn needleman_wunsch_affine(py: Python, a: &str, b: &str, match_score: i64, mismatch_score: i64, gap_open: i64, gap_extend: i64) -> PyResult<i64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch_affine(a, b, match_score, mismatch_score, gap_open, gap_extend)))
+fn needleman_wunsch_affine(
+    py: Python,
+    a: &str,
+    b: &str,
+    match_score: i64,
+    mismatch_score: i64,
+    gap_open: i64,
+    gap_extend: i64,
+) -> PyResult<i64> {
+    py.allow_threads(|| {
+        Ok(fuzzgpu_core::needleman_wunsch_affine(
+            a,
+            b,
+            match_score,
+            mismatch_score,
+            gap_open,
+            gap_extend,
+        ))
+    })
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(query, candidates, match_score, mismatch_score, gap_open, gap_extend, /)")]
-fn needleman_wunsch_affine_batch(py: Python, query: &str, candidates: &Bound<'_, PyAny>, match_score: i64, mismatch_score: i64, gap_open: i64, gap_extend: i64) -> PyResult<Vec<i64>> {
+#[pyo3(
+    text_signature = "(query, candidates, match_score, mismatch_score, gap_open, gap_extend, /)"
+)]
+fn needleman_wunsch_affine_batch(
+    py: Python,
+    query: &str,
+    candidates: &Bound<'_, PyAny>,
+    match_score: i64,
+    mismatch_score: i64,
+    gap_open: i64,
+    gap_extend: i64,
+) -> PyResult<Vec<i64>> {
     let refs = borrow_strs(candidates)?;
     let refs = str_refs(&refs)?;
     // Route through the GPU affine Needleman-Wunsch kernel when available.
@@ -455,7 +580,9 @@ fn needleman_wunsch_affine_batch(py: Python, query: &str, candidates: &Bound<'_,
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::needleman::gpu_ext::GpuNeedlemanAffineKernel::get() {
                 let pairs: Vec<(&str, &str)> = refs.iter().map(|c| (query, *c)).collect();
-                match py.allow_threads(|| kernel.compute_batch(&pairs, match_score, mismatch_score, gap_open, gap_extend)) {
+                match py.allow_threads(|| {
+                    kernel.compute_batch(&pairs, match_score, mismatch_score, gap_open, gap_extend)
+                }) {
                     Ok(res) => return Ok(res),
                     Err(e) => {
                         if is_force_gpu() {
@@ -473,7 +600,16 @@ fn needleman_wunsch_affine_batch(py: Python, query: &str, candidates: &Bound<'_,
             }
         }
     }
-    py.allow_threads(|| Ok(fuzzgpu_core::needleman_wunsch_affine_batch(query, &refs, match_score, mismatch_score, gap_open, gap_extend)))
+    py.allow_threads(|| {
+        Ok(fuzzgpu_core::needleman_wunsch_affine_batch(
+            query,
+            &refs,
+            match_score,
+            mismatch_score,
+            gap_open,
+            gap_extend,
+        ))
+    })
 }
 
 // ── Jaro-Winkler ────────────────────────────────────────────
@@ -530,7 +666,12 @@ fn jaro_batch_core(py: Python<'_>, query: &str, cands: &[&str], p: f64) -> PyRes
 
 #[pyfunction]
 #[pyo3(signature = (query, candidates, p = 0.1), text_signature = "(query, candidates, p=0.1, /)")]
-fn jaro_winkler_batch_fn(py: Python, query: &str, candidates: &Bound<'_, PyAny>, p: f64) -> PyResult<Vec<f64>> {
+fn jaro_winkler_batch_fn(
+    py: Python,
+    query: &str,
+    candidates: &Bound<'_, PyAny>,
+    p: f64,
+) -> PyResult<Vec<f64>> {
     if !(0.0..=0.25).contains(&p) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "Prefix scaling parameter 'p' must be between 0.0 and 0.25",
@@ -542,7 +683,12 @@ fn jaro_winkler_batch_fn(py: Python, query: &str, candidates: &Bound<'_, PyAny>,
 }
 
 /// Shared compute for `jaro_winkler_cdist` / `..._into`.
-fn jaro_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str], p: f64) -> PyResult<Vec<Vec<f64>>> {
+fn jaro_cdist_core(
+    py: Python<'_>,
+    refs_a: &[&str],
+    refs_b: &[&str],
+    p: f64,
+) -> PyResult<Vec<Vec<f64>>> {
     // Route through the GPU matrix kernel when available. Falls back to CPU
     // on any GPU error (unless FUZZGPU_FORCE_GPU is set).
     #[cfg(feature = "gpu")]
@@ -567,12 +713,21 @@ fn jaro_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str], p: f64) -> 
             }
         }
     }
-    py.allow_threads(|| Ok(fuzzgpu_core::jaro::jaro_winkler_cdist_cpu(refs_a, refs_b, p)))
+    py.allow_threads(|| {
+        Ok(fuzzgpu_core::jaro::jaro_winkler_cdist_cpu(
+            refs_a, refs_b, p,
+        ))
+    })
 }
 
 #[pyfunction]
 #[pyo3(signature = (list_a, list_b, p = 0.1), text_signature = "(list_a, list_b, p=0.1, /)")]
-fn jaro_winkler_cdist(py: Python, list_a: &Bound<'_, PyAny>, list_b: &Bound<'_, PyAny>, p: f64) -> PyResult<Vec<Vec<f64>>> {
+fn jaro_winkler_cdist(
+    py: Python,
+    list_a: &Bound<'_, PyAny>,
+    list_b: &Bound<'_, PyAny>,
+    p: f64,
+) -> PyResult<Vec<Vec<f64>>> {
     if !(0.0..=0.25).contains(&p) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "Prefix scaling parameter 'p' must be between 0.0 and 0.25",
@@ -589,7 +744,13 @@ fn jaro_winkler_cdist(py: Python, list_a: &Bound<'_, PyAny>, list_b: &Bound<'_, 
 /// [`levenshtein_batch_into`]).
 #[pyfunction]
 #[pyo3(signature = (query, candidates, out, p = 0.1), text_signature = "(query, candidates, out, p=0.1, /)")]
-fn jaro_winkler_batch_into(py: Python<'_>, query: &str, candidates: &Bound<'_, PyAny>, out: &Bound<'_, PyAny>, p: f64) -> PyResult<()> {
+fn jaro_winkler_batch_into(
+    py: Python<'_>,
+    query: &str,
+    candidates: &Bound<'_, PyAny>,
+    out: &Bound<'_, PyAny>,
+    p: f64,
+) -> PyResult<()> {
     if !(0.0..=0.25).contains(&p) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "Prefix scaling parameter 'p' must be between 0.0 and 0.25",
@@ -606,7 +767,13 @@ fn jaro_winkler_batch_into(py: Python<'_>, query: &str, candidates: &Bound<'_, P
 /// contiguous `(len(list_a), len(list_b))` buffer of `float64` (row-major).
 #[pyfunction]
 #[pyo3(signature = (list_a, list_b, out, p = 0.1), text_signature = "(list_a, list_b, out, p=0.1, /)")]
-fn jaro_winkler_cdist_into(py: Python<'_>, list_a: &Bound<'_, PyAny>, list_b: &Bound<'_, PyAny>, out: &Bound<'_, PyAny>, p: f64) -> PyResult<()> {
+fn jaro_winkler_cdist_into(
+    py: Python<'_>,
+    list_a: &Bound<'_, PyAny>,
+    list_b: &Bound<'_, PyAny>,
+    out: &Bound<'_, PyAny>,
+    p: f64,
+) -> PyResult<()> {
     if !(0.0..=0.25).contains(&p) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "Prefix scaling parameter 'p' must be between 0.0 and 0.25",
@@ -648,7 +815,13 @@ fn fuzz_partial_ratio_alignment(
 ) -> PyResult<(f64, usize, usize, usize, usize)> {
     py.allow_threads(|| {
         let al = fuzzgpu_core::partial_ratio_alignment(a, b, score_cutoff);
-        Ok((al.score, al.src_start, al.src_end, al.dest_start, al.dest_end))
+        Ok((
+            al.score,
+            al.src_start,
+            al.src_end,
+            al.dest_start,
+            al.dest_end,
+        ))
     })
 }
 
@@ -686,7 +859,13 @@ fn fuzz_ratio_batch(py: Python, query: &str, candidates: &Bound<'_, PyAny>) -> P
 
 #[pyfunction]
 #[pyo3(signature = (query, choices, score_cutoff = 0.0, limit = 5), text_signature = "(query, choices, score_cutoff=0.0, limit=5, /)")]
-fn fuzz_extract(py: Python, query: &str, choices: &Bound<'_, PyAny>, score_cutoff: f64, limit: usize) -> PyResult<Vec<(String, f64, usize)>> {
+fn fuzz_extract(
+    py: Python,
+    query: &str,
+    choices: &Bound<'_, PyAny>,
+    score_cutoff: f64,
+    limit: usize,
+) -> PyResult<Vec<(String, f64, usize)>> {
     let refs = borrow_strs(choices)?;
     let refs = str_refs(&refs)?;
     py.allow_threads(|| Ok(fuzzgpu_core::extract(query, &refs, score_cutoff, limit)))
@@ -694,7 +873,12 @@ fn fuzz_extract(py: Python, query: &str, choices: &Bound<'_, PyAny>, score_cutof
 
 #[pyfunction]
 #[pyo3(signature = (query, choices, score_cutoff = 0.0), text_signature = "(query, choices, score_cutoff=0.0, /)")]
-fn fuzz_extract_one(py: Python, query: &str, choices: &Bound<'_, PyAny>, score_cutoff: f64) -> PyResult<Option<(String, f64, usize)>> {
+fn fuzz_extract_one(
+    py: Python,
+    query: &str,
+    choices: &Bound<'_, PyAny>,
+    score_cutoff: f64,
+) -> PyResult<Option<(String, f64, usize)>> {
     let refs = borrow_strs(choices)?;
     let refs = str_refs(&refs)?;
     py.allow_threads(|| Ok(fuzzgpu_core::extract_one(query, &refs, score_cutoff)))
@@ -716,12 +900,31 @@ fn levenshtein_myers(py: Python, a: &str, b: &str) -> PyResult<u32> {
 
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, match_score, mismatch_score, gap_penalty, /)")]
-fn needleman_wunsch_striped(py: Python, a: &str, b: &str, match_score: i64, mismatch_score: i64, gap_penalty: i64) -> PyResult<i64> {
+fn needleman_wunsch_striped(
+    py: Python,
+    a: &str,
+    b: &str,
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
+) -> PyResult<i64> {
     py.allow_threads(|| {
         if a.is_ascii() && b.is_ascii() {
-            Ok(fuzzgpu_core::needleman_wunsch_striped(a.as_bytes(), b.as_bytes(), match_score, mismatch_score, gap_penalty))
+            Ok(fuzzgpu_core::needleman_wunsch_striped(
+                a.as_bytes(),
+                b.as_bytes(),
+                match_score,
+                mismatch_score,
+                gap_penalty,
+            ))
         } else {
-            Ok(fuzzgpu_core::needleman_wunsch(a, b, match_score, mismatch_score, gap_penalty))
+            Ok(fuzzgpu_core::needleman_wunsch(
+                a,
+                b,
+                match_score,
+                mismatch_score,
+                gap_penalty,
+            ))
         }
     })
 }
@@ -798,11 +1001,26 @@ fn warmup() -> (bool, String) {
     #[cfg(feature = "gpu")]
     {
         if GpuEngine::is_cpu_only() {
-            return (false, "CPU-only mode is active (set via set_cpu_only or FUZZGPU_USE_CPU)".into());
+            return (
+                false,
+                "CPU-only mode is active (set via set_cpu_only or FUZZGPU_USE_CPU)".into(),
+            );
         }
         match GpuEngine::get() {
-            Ok(engine) => (true, format!("GPU initialized: {} ({})", engine.info.name, engine.info.backend)),
-            Err(e) => (false, format!("GPU initialization failed ({}), using Rayon CPU fallback", e)),
+            Ok(engine) => (
+                true,
+                format!(
+                    "GPU initialized: {} ({})",
+                    engine.info.name, engine.info.backend
+                ),
+            ),
+            Err(e) => (
+                false,
+                format!(
+                    "GPU initialization failed ({}), using Rayon CPU fallback",
+                    e
+                ),
+            ),
         }
     }
     #[cfg(not(feature = "gpu"))]
@@ -825,7 +1043,9 @@ fn gpu_info() -> PyResult<String> {
         }
     }
     #[cfg(not(feature = "gpu"))]
-    { Ok("CPU-only mode (built without gpu feature)".into()) }
+    {
+        Ok("CPU-only mode (built without gpu feature)".into())
+    }
 }
 
 #[pyfunction]
@@ -834,9 +1054,8 @@ fn hardware_info() -> String {
     #[cfg(feature = "gpu")]
     {
         if GpuEngine::is_cpu_only() {
-            return format!(
-                "CPU-only fallback mode (GPU dispatch threshold: N/A, last routing: CPU)"
-            );
+            return "CPU-only fallback mode (GPU dispatch threshold: N/A, last routing: CPU)"
+                .into();
         }
         match GpuEngine::get() {
             Ok(engine) => {
@@ -859,7 +1078,9 @@ fn hardware_info() -> String {
         }
     }
     #[cfg(not(feature = "gpu"))]
-    { "CPU-only mode (built without gpu feature)".into() }
+    {
+        "CPU-only mode (built without gpu feature)".into()
+    }
 }
 
 #[pyfunction]

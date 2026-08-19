@@ -11,17 +11,26 @@ class TestApiSurface:
     def test_top_level_exports(self):
         expected_exports = [
             "levenshtein_distance", "levenshtein_batch", "levenshtein_cdist",
-            "damerau_levenshtein_distance", "damerau_levenshtein_batch", "damerau_levenshtein_cdist", "damerau_ratio",
-            "needleman_wunsch_score", "needleman_wunsch_batch_fn", "needleman_wunsch_affine", "needleman_wunsch_affine_batch",
+            "levenshtein_batch_into", "levenshtein_cdist_into",
+            "damerau_levenshtein_distance", "damerau_levenshtein_batch", "damerau_levenshtein_cdist",
+            "damerau_levenshtein_batch_into", "damerau_levenshtein_cdist_into", "damerau_ratio",
+            "needleman_wunsch_score", "needleman_wunsch_batch_fn", "needleman_wunsch_affine",
+            "needleman_wunsch_affine_batch", "needleman_wunsch_batch",
             "jaro_similarity", "jaro_winkler_similarity", "jaro_winkler_batch_fn", "jaro_winkler_cdist",
+            "jaro_winkler_batch_into", "jaro_winkler_cdist_into", "jaro_winkler_batch",
             "fuzz_ratio", "fuzz_partial_ratio", "fuzz_token_sort_ratio", "fuzz_token_set_ratio",
             "fuzz_wratio", "fuzz_ratio_batch", "fuzz_extract", "fuzz_extract_one",
+            "fuzz_partial_ratio_alignment", "fuzz_token_ratio",
+            "fuzz_partial_token_sort_ratio", "fuzz_partial_token_set_ratio", "fuzz_partial_token_ratio",
+            "fuzz_qratio", "QRatio",
             "levenshtein_myers", "needleman_wunsch_striped", "jaro_optimized",
-            "gpu_info", "__version__",
-            # Clean Aliases
-            "levenshtein", "damerau_levenshtein", "needleman_wunsch", "needleman_wunsch_batch",
+            "gpu_info", "hardware_info", "is_gpu_available", "warmup",
+            "__version__", "set_cpu_only", "set_gpu_threshold",
+            # Aliases
+            "levenshtein", "damerau", "damerau_levenshtein", "jaro",
+            "needleman_wunsch", "needleman_wunsch_batch",
             "jaro_winkler_batch", "ratio", "partial_ratio", "token_sort_ratio", "token_set_ratio",
-            "wratio", "ratio_batch", "extract", "extractOne",
+            "wratio", "ratio_batch", "extract", "extractOne", "extract_one", "partial_ratio_alignment",
         ]
         for name in expected_exports:
             assert hasattr(fuzzgpu, name), f"Missing export in fuzzgpu: {name}"
@@ -29,7 +38,11 @@ class TestApiSurface:
     def test_fuzz_submodule_exports(self):
         expected_in_fuzz = [
             "ratio", "partial_ratio", "token_sort_ratio", "token_set_ratio",
-            "WRatio", "ratio_batch", "extract", "extractOne", "damerau_ratio",
+            "WRatio", "QRatio", "ratio_batch", "extract", "extractOne",
+            "damerau_ratio", "wratio", "cdist",
+            "partial_ratio_alignment", "extract_one",
+            "partial_token_ratio", "partial_token_sort_ratio", "partial_token_set_ratio",
+            "token_ratio",
         ]
         for name in expected_in_fuzz:
             assert hasattr(fuzz, name), f"Missing export in fuzzgpu.fuzz: {name}"

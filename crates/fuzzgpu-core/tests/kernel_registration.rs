@@ -41,13 +41,15 @@ fn broken_wgsl_file_returns_shader_error() {
         Some(e) => e,
         None => return,
     };
-    let layout = engine.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        // wgpu 30: bind group layouts are Option-wrapped; push constants are
-        // now `immediate_size` (0 = none).
-        bind_group_layouts: &[],
-        immediate_size: 0,
-    });
+    let layout = engine
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            // wgpu 30: bind group layouts are Option-wrapped; push constants are
+            // now `immediate_size` (0 = none).
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
 
     match engine.build_compute_pipeline("broken kernel", BROKEN, &layout) {
         Err(FuzzGpuError::ShaderError(msg)) => {
@@ -66,13 +68,15 @@ fn valid_wgsl_registers_successfully() {
         Some(e) => e,
         None => return,
     };
-    let layout = engine.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        // wgpu 30: bind group layouts are Option-wrapped; push constants are
-        // now `immediate_size` (0 = none).
-        bind_group_layouts: &[],
-        immediate_size: 0,
-    });
+    let layout = engine
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            // wgpu 30: bind group layouts are Option-wrapped; push constants are
+            // now `immediate_size` (0 = none).
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
 
     let pipeline = engine
         .build_compute_pipeline("valid kernel", VALID, &layout)

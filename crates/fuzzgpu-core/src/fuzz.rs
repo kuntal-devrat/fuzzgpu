@@ -1,3 +1,10 @@
+#![allow(
+    clippy::manual_clamp,
+    clippy::manual_div_ceil,
+    clippy::needless_range_loop,
+    clippy::unnecessary_map_or
+)]
+
 use rayon::prelude::*;
 use std::collections::{BTreeSet, HashSet};
 
@@ -25,9 +32,15 @@ fn indel_distance_bytes(a: &[u8], b: &[u8]) -> u32 {
 
 fn indel_distance_slice<T: PartialEq>(a: &[T], b: &[T]) -> u32 {
     let (m, n) = (a.len(), b.len());
-    if m == 0 { return n as u32; }
-    if n == 0 { return m as u32; }
-    if a == b { return 0; }
+    if m == 0 {
+        return n as u32;
+    }
+    if n == 0 {
+        return m as u32;
+    }
+    if a == b {
+        return 0;
+    }
 
     let mut row = vec![0u32; n + 1];
     for (j, item) in row.iter_mut().enumerate() {
@@ -62,8 +75,16 @@ pub fn ratio(s1: &str, s2: &str) -> f64 {
 /// `ratio` with rapidfuzz's cutoff semantics: returns 0.0 when the score is
 /// below `score_cutoff`, otherwise the raw score.
 pub fn ratio_with_cutoff(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
-    let len_a = if s1.is_ascii() { s1.len() } else { s1.chars().count() };
-    let len_b = if s2.is_ascii() { s2.len() } else { s2.chars().count() };
+    let len_a = if s1.is_ascii() {
+        s1.len()
+    } else {
+        s1.chars().count()
+    };
+    let len_b = if s2.is_ascii() {
+        s2.len()
+    } else {
+        s2.chars().count()
+    };
     let total = len_a + len_b;
     let score = if total == 0 {
         100.0
@@ -71,7 +92,11 @@ pub fn ratio_with_cutoff(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
         let dist = indel_distance(s1, s2) as f64;
         (1.0 - dist / total as f64) * 100.0
     };
-    if score >= score_cutoff { score } else { 0.0 }
+    if score >= score_cutoff {
+        score
+    } else {
+        0.0
+    }
 }
 
 /// rapidfuzz `norm_distance`: similarity from an edit distance normalized by
@@ -83,7 +108,11 @@ fn norm_distance(dist: usize, lensum: usize, score_cutoff: f64) -> f64 {
     } else {
         100.0
     };
-    if score >= score_cutoff { score } else { 0.0 }
+    if score >= score_cutoff {
+        score
+    } else {
+        0.0
+    }
 }
 
 /// rapidfuzz `score_cutoff_to_distance`: the maximum edit distance that can
@@ -115,7 +144,11 @@ fn ratio_slices_with_cutoff<T: PartialEq>(a: &[T], b: &[T], score_cutoff: f64) -
         let dist = indel_distance_slice(a, b) as f64;
         (1.0 - dist / lensum as f64) * 100.0
     };
-    if score >= score_cutoff { score } else { 0.0 }
+    if score >= score_cutoff {
+        score
+    } else {
+        0.0
+    }
 }
 
 /// Port of rapidfuzz's `partial_ratio_impl` (fuzz_impl.hpp): the branch-and-bound
@@ -272,15 +305,33 @@ fn partial_ratio_alignment_slices<T: PartialEq + Eq + std::hash::Hash + Copy + C
     }
 
     if score_cutoff > 100.0 {
-        return Alignment { score: 0.0, src_start: 0, src_end: len1, dest_start: 0, dest_end: len1 };
+        return Alignment {
+            score: 0.0,
+            src_start: 0,
+            src_end: len1,
+            dest_start: 0,
+            dest_end: len1,
+        };
     }
     if len1 == 0 || len2 == 0 {
         let score = if len1 == len2 { 100.0 } else { 0.0 };
-        return Alignment { score, src_start: 0, src_end: len1, dest_start: 0, dest_end: len1 };
+        return Alignment {
+            score,
+            src_start: 0,
+            src_end: len1,
+            dest_start: 0,
+            dest_end: len1,
+        };
     }
 
     let (score, ds, de) = partial_ratio_impl(a, b, score_cutoff);
-    let mut alignment = Alignment { score, src_start: 0, src_end: len1, dest_start: ds, dest_end: de };
+    let mut alignment = Alignment {
+        score,
+        src_start: 0,
+        src_end: len1,
+        dest_start: ds,
+        dest_end: de,
+    };
 
     // Equal-length second pass in the other direction (rapidfuzz-exact: the
     // reverse-direction search can find a better window/prefix/suffix match).
@@ -511,7 +562,11 @@ pub fn partial_token_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
     }
 
     let c = score_cutoff.max(result);
-    result.max(partial_ratio(&decomp.diff_ab.join(" "), &decomp.diff_ba.join(" "), c))
+    result.max(partial_ratio(
+        &decomp.diff_ab.join(" "),
+        &decomp.diff_ba.join(" "),
+        c,
+    ))
 }
 
 /// Partial token set ratio (rapidfuzz-exact).
@@ -532,7 +587,11 @@ pub fn partial_token_set_ratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
         return 100.0;
     }
 
-    partial_ratio(&decomp.diff_ab.join(" "), &decomp.diff_ba.join(" "), score_cutoff)
+    partial_ratio(
+        &decomp.diff_ab.join(" "),
+        &decomp.diff_ba.join(" "),
+        score_cutoff,
+    )
 }
 
 /// WRatio: rapidfuzz's weighted combination — length-ratio-scaled partial
@@ -600,26 +659,47 @@ pub fn ratio_batch(query: &str, candidates: &[&str]) -> Vec<f64> {
 /// Extract top matches with partial-sort optimization.
 ///
 /// Returns `Vec<(match_string, score, original_index)>` sorted by score descending.
-pub fn extract(query: &str, choices: &[&str], score_cutoff: f64, limit: usize) -> Vec<(String, f64, usize)> {
-    if choices.is_empty() || limit == 0 { return vec![]; }
+pub fn extract(
+    query: &str,
+    choices: &[&str],
+    score_cutoff: f64,
+    limit: usize,
+) -> Vec<(String, f64, usize)> {
+    if choices.is_empty() || limit == 0 {
+        return vec![];
+    }
 
     let mut results: Vec<(String, f64, usize)> = if choices.len() > 1000 {
-        choices.par_iter().enumerate()
+        choices
+            .par_iter()
+            .enumerate()
             .filter_map(|(i, c)| {
                 let score = ratio(query, c);
-                if score >= score_cutoff { Some((c.to_string(), score, i)) } else { None }
+                if score >= score_cutoff {
+                    Some((c.to_string(), score, i))
+                } else {
+                    None
+                }
             })
             .collect()
     } else {
-        choices.iter().enumerate()
+        choices
+            .iter()
+            .enumerate()
             .filter_map(|(i, c)| {
                 let score = ratio(query, c);
-                if score >= score_cutoff { Some((c.to_string(), score, i)) } else { None }
+                if score >= score_cutoff {
+                    Some((c.to_string(), score, i))
+                } else {
+                    None
+                }
             })
             .collect()
     };
 
-    if results.is_empty() { return results; }
+    if results.is_empty() {
+        return results;
+    }
 
     if limit < results.len() {
         results.select_nth_unstable_by(limit, |a, b| {
@@ -637,20 +717,28 @@ pub fn extract(query: &str, choices: &[&str], score_cutoff: f64, limit: usize) -
 /// Extract the single best match above the score cutoff.
 ///
 /// Returns `Some((match_string, score, index))` or `None`.
-pub fn extract_one(query: &str, choices: &[&str], score_cutoff: f64) -> Option<(String, f64, usize)> {
-    if choices.is_empty() { return None; }
+pub fn extract_one(
+    query: &str,
+    choices: &[&str],
+    score_cutoff: f64,
+) -> Option<(String, f64, usize)> {
+    if choices.is_empty() {
+        return None;
+    }
 
     let mut best: Option<(String, f64, usize)> = None;
 
     for (i, c) in choices.iter().enumerate() {
         let score = ratio(query, c);
         if score >= score_cutoff {
-            let is_better = best.as_ref().map_or(true, |(_, bs, _)| score > *bs);
+            let is_better = best.as_ref().is_none_or(|(_, bs, _)| score > *bs);
             if is_better {
                 // Update best before the early-exit check so an exact match
                 // at index i is always returned rather than an earlier non-exact.
                 best = Some((c.to_string(), score, i));
-                if score == 100.0 { break; }
+                if score == 100.0 {
+                    break;
+                }
             }
         }
     }
@@ -719,10 +807,16 @@ mod tests {
     fn test_partial_ratio_alignment_empty() {
         let a = partial_ratio_alignment("", "", 0.0);
         assert_eq!(a.score, 100.0);
-        assert_eq!((a.src_start, a.src_end, a.dest_start, a.dest_end), (0, 0, 0, 0));
+        assert_eq!(
+            (a.src_start, a.src_end, a.dest_start, a.dest_end),
+            (0, 0, 0, 0)
+        );
         let a = partial_ratio_alignment("abc", "", 0.0);
         assert_eq!(a.score, 0.0);
-        assert_eq!((a.src_start, a.src_end, a.dest_start, a.dest_end), (0, 0, 0, 0));
+        assert_eq!(
+            (a.src_start, a.src_end, a.dest_start, a.dest_end),
+            (0, 0, 0, 0)
+        );
     }
 
     #[test]
@@ -763,7 +857,10 @@ mod tests {
     #[test]
     fn test_partial_token_set_ratio_common_word() {
         // Non-empty intersection -> 100 (rapidfuzz).
-        assert_eq!(partial_token_set_ratio("hello world", "hello there", 0.0), 100.0);
+        assert_eq!(
+            partial_token_set_ratio("hello world", "hello there", 0.0),
+            100.0
+        );
     }
 
     #[test]
@@ -775,10 +872,19 @@ mod tests {
         let d = set_decomposition(&t1, &t2);
         println!("t1={:?}", t1);
         println!("t2={:?}", t2);
-        println!("inter={:?} diff_ab={:?} diff_ba={:?}", d.intersection, d.diff_ab, d.diff_ba);
+        println!(
+            "inter={:?} diff_ab={:?} diff_ba={:?}",
+            d.intersection, d.diff_ab, d.diff_ba
+        );
         let ab = d.diff_ab.join(" ");
         let ba = d.diff_ba.join(" ");
-        println!("ab='{}'({}) ba='{}'({})", ab, ab.chars().count(), ba, ba.chars().count());
+        println!(
+            "ab='{}'({}) ba='{}'({})",
+            ab,
+            ab.chars().count(),
+            ba,
+            ba.chars().count()
+        );
         println!("sect_len(no sep)={}", intersection_len(&d.intersection));
         println!("indel={}", indel_distance(&ab, &ba));
         let s1b = "new york mets";
@@ -786,10 +892,21 @@ mod tests {
         let u1 = sorted_split(s1b);
         let u2 = sorted_split(s2b);
         let e = set_decomposition(&u1, &u2);
-        println!("mets: inter={:?} diff_ab={:?} diff_ba={:?}", e.intersection, e.diff_ab, e.diff_ba);
+        println!(
+            "mets: inter={:?} diff_ab={:?} diff_ba={:?}",
+            e.intersection, e.diff_ab, e.diff_ba
+        );
         let mab = e.diff_ab.join(" ");
         let mba = e.diff_ba.join(" ");
-        println!("mets: ab='{}'({}) ba='{}'({}) sect_len={} indel={}", mab, mab.chars().count(), mba, mba.chars().count(), intersection_len(&e.intersection), indel_distance(&mab, &mba));
+        println!(
+            "mets: ab='{}'({}) ba='{}'({}) sect_len={} indel={}",
+            mab,
+            mab.chars().count(),
+            mba,
+            mba.chars().count(),
+            intersection_len(&e.intersection),
+            indel_distance(&mab, &mba)
+        );
     }
 
     #[test]
@@ -800,5 +917,241 @@ mod tests {
         let (m, s, _) = result.unwrap();
         assert_eq!(m, "apple");
         assert!((s - 100.0).abs() < 0.01);
+    }
+
+    // ── Comprehensive additional tests ──────────────────────────────────────
+
+    #[test]
+    fn test_ratio_identical() {
+        assert_eq!(ratio("hello", "hello"), 100.0);
+        assert_eq!(ratio("", ""), 100.0);
+    }
+
+    #[test]
+    fn test_ratio_completely_different() {
+        // "abc" (3) vs "xyz" (3): no common chars in indel model.
+        // indel_distance = 6 (3 del + 3 ins), total = 6, ratio = 0.0
+        let r = ratio("abc", "xyz");
+        assert!((0.0..=100.0).contains(&r));
+    }
+
+    #[test]
+    fn test_ratio_with_cutoff_below_returns_zero() {
+        let r = ratio_with_cutoff("hello", "hallo", 90.0);
+        assert_eq!(r, 0.0, "Score below cutoff must return 0.0");
+    }
+
+    #[test]
+    fn test_ratio_with_cutoff_above_returns_score() {
+        let r = ratio_with_cutoff("hello", "hallo", 70.0);
+        assert!((r - 80.0).abs() < 0.01, "Expected 80.0, got {r}");
+    }
+
+    #[test]
+    fn test_ratio_symmetry() {
+        let pairs = [("hello", "hallo"), ("kitten", "sitting"), ("a", "")];
+        for (a, b) in &pairs {
+            let ab = ratio(a, b);
+            let ba = ratio(b, a);
+            assert!(
+                (ab - ba).abs() < 1e-12,
+                "ratio not symmetric for ({a:?}, {b:?}): {ab} vs {ba}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ratio_batch_matches_serial() {
+        let query = "benchmark";
+        let candidates = vec!["benchmarks", "bench", "mark", "benchmark", "", "BENCHMARK"];
+        let batch = ratio_batch(query, &candidates);
+        assert_eq!(batch.len(), candidates.len());
+        for (i, c) in candidates.iter().enumerate() {
+            let expected = ratio(query, c);
+            assert!(
+                (batch[i] - expected).abs() < 1e-12,
+                "ratio_batch[{i}] ({c:?}) mismatch: {} vs {expected}",
+                batch[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_ratio_batch_large() {
+        let query = "test_query";
+        let candidates: Vec<String> = (0..2000).map(|i| format!("item_{}", i % 40)).collect();
+        let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+        let batch = ratio_batch(query, &refs);
+        assert_eq!(batch.len(), 2000);
+        assert!(batch.iter().all(|&r| (0.0..=100.0).contains(&r)));
+    }
+
+    #[test]
+    fn test_partial_ratio_longer_second() {
+        let r = partial_ratio("hello", "oh hello there", 0.0);
+        assert!((r - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_partial_ratio_swap_gives_same() {
+        let ab = partial_ratio("hello", "oh hello there", 0.0);
+        let ba = partial_ratio("oh hello there", "hello", 0.0);
+        assert!(
+            (ab - ba).abs() < 1e-12,
+            "partial_ratio not symmetric: {ab} vs {ba}"
+        );
+    }
+
+    #[test]
+    fn test_partial_ratio_cutoff_filters() {
+        assert_eq!(partial_ratio("hello", "hallo", 90.0), 0.0);
+    }
+
+    #[test]
+    fn test_token_sort_ratio_reordered() {
+        assert_eq!(token_sort_ratio("b a c", "a b c", 0.0), 100.0);
+        assert_eq!(token_sort_ratio("hello world", "world hello", 0.0), 100.0);
+    }
+
+    #[test]
+    fn test_token_set_ratio_subset() {
+        assert_eq!(token_set_ratio("a b c", "a b c d e", 0.0), 100.0);
+        assert_eq!(token_set_ratio("a b c d e", "a b c", 0.0), 100.0);
+    }
+
+    #[test]
+    fn test_token_ratio_empty_both_is_100() {
+        // rapidfuzz: token_ratio("","") = 100 (no FuzzyWuzzy empty guard)
+        assert_eq!(token_ratio("", "", 0.0), 100.0);
+    }
+
+    #[test]
+    fn test_token_ratio_one_empty_is_0() {
+        assert_eq!(token_ratio("abc", "", 0.0), 0.0);
+        assert_eq!(token_ratio("", "abc", 0.0), 0.0);
+    }
+
+    #[test]
+    fn test_partial_token_sort_ratio_substring_sort() {
+        let r = partial_token_sort_ratio("york new", "new york mets", 0.0);
+        assert!((r - 100.0).abs() < 0.01, "Expected ~100.0, got {r}");
+    }
+
+    #[test]
+    fn test_wratio_identical_is_100() {
+        assert_eq!(wratio("hello", "hello", 0.0), 100.0);
+    }
+
+    #[test]
+    fn test_wratio_cutoff_above_100_returns_zero() {
+        assert_eq!(wratio("hello", "hello", 101.0), 0.0);
+    }
+
+    #[test]
+    fn test_wratio_large_length_ratio() {
+        let long = "a".repeat(100);
+        let short = "a".repeat(5);
+        let r = wratio(&short, &long, 0.0);
+        assert!((0.0..=100.0).contains(&r));
+    }
+
+    #[test]
+    fn test_qratio_identical_is_100() {
+        assert_eq!(qratio("hello", "hello", 0.0), 100.0);
+    }
+
+    #[test]
+    fn test_extract_empty_choices() {
+        assert_eq!(extract("q", &[], 0.0, 10), vec![]);
+    }
+
+    #[test]
+    fn test_extract_limit_zero() {
+        assert_eq!(extract("q", &["a", "b"], 0.0, 0), vec![]);
+    }
+
+    #[test]
+    fn test_extract_cutoff_above_100() {
+        assert_eq!(extract("apple", &["apple"], 101.0, 5), vec![]);
+    }
+
+    #[test]
+    fn test_extract_sorted_descending() {
+        let choices = vec!["apple", "apply", "ape", "banana"];
+        let results = extract("apple", &choices, 0.0, 10);
+        assert!(!results.is_empty());
+        for w in results.windows(2) {
+            assert!(w[0].1 >= w[1].1, "Not sorted: {} < {}", w[0].1, w[1].1);
+        }
+    }
+
+    #[test]
+    fn test_extract_limit_truncates() {
+        let choices: Vec<&str> = (0..50).map(|_| "apple").collect();
+        let results = extract("apple", &choices, 0.0, 5);
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn test_extract_preserves_original_index() {
+        let choices = vec!["banana", "apple", "cherry"];
+        let results = extract("apple", &choices, 90.0, 5);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].2, 1, "Index must be 1 (position of 'apple')");
+    }
+
+    #[test]
+    fn test_extract_one_below_cutoff_is_none() {
+        assert!(extract_one("apple", &["zzz"], 90.0).is_none());
+    }
+
+    #[test]
+    fn test_extract_one_exact_match_wins() {
+        let choices = vec!["appel", "apply", "apple"];
+        let result = extract_one("apple", &choices, 0.0).unwrap();
+        assert_eq!(result.0, "apple");
+        assert_eq!(result.1, 100.0);
+    }
+
+    #[test]
+    fn test_extract_one_correct_index() {
+        let choices = vec!["banana", "cherry", "apple"];
+        let result = extract_one("apple", &choices, 0.0).unwrap();
+        assert_eq!(choices[result.2], "apple");
+    }
+
+    #[test]
+    fn test_indel_distance_ascii() {
+        // substitution cost = 2 in the indel model
+        assert_eq!(indel_distance("hello", "hallo"), 2);
+        assert_eq!(indel_distance("abc", "abc"), 0);
+        assert_eq!(indel_distance("", "abc"), 3);
+        assert_eq!(indel_distance("abc", ""), 3);
+    }
+
+    #[test]
+    fn test_indel_distance_unicode() {
+        let d = indel_distance("café", "cafe");
+        assert!(d > 0, "café vs cafe must differ");
+    }
+
+    #[test]
+    fn test_ratio_unicode_large() {
+        let a = "日本語テスト".repeat(5);
+        assert_eq!(ratio(&a, &a), 100.0);
+        assert!((0.0..=100.0).contains(&ratio(&a, "hello")));
+    }
+
+    #[test]
+    fn test_partial_token_set_ratio_empty_intersection() {
+        let r = partial_token_set_ratio("abc def", "xyz uvw", 0.0);
+        assert!((0.0..=100.0).contains(&r));
+    }
+
+    #[test]
+    fn test_wratio_len_ratio_border_1_5() {
+        // len_ratio < 1.5 → token_ratio branch
+        let r = wratio("new york mets", "new york", 0.0);
+        assert!((0.0..=100.0).contains(&r));
     }
 }

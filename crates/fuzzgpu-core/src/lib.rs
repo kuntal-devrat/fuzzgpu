@@ -1,11 +1,11 @@
-pub mod levenshtein;
-pub mod needleman;
-pub mod jaro;
-pub mod fuzz;
-pub mod simd;
 pub mod damerau;
+pub mod fuzz;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod jaro;
+pub mod levenshtein;
+pub mod needleman;
+pub mod simd;
 
 #[cfg(feature = "gpu")]
 pub use gpu::{GpuEngine, GpuInfo, Result};
@@ -13,18 +13,23 @@ pub use gpu::{GpuEngine, GpuInfo, Result};
 #[cfg(not(feature = "gpu"))]
 pub type Result<T> = std::result::Result<T, String>;
 
+pub use damerau::{
+    damerau_levenshtein_batch, damerau_levenshtein_cdist, damerau_levenshtein_distance,
+    damerau_ratio,
+};
+pub use fuzz::{
+    extract, extract_one, partial_ratio, partial_ratio_alignment, partial_token_ratio,
+    partial_token_set_ratio, partial_token_sort_ratio, qratio, ratio, ratio_batch,
+    ratio_with_cutoff, token_ratio, token_set_ratio, token_sort_ratio, wratio, Alignment,
+};
+pub use jaro::{jaro, jaro_winkler, jaro_winkler_batch};
 pub use levenshtein::levenshtein_distance_raw;
 pub use levenshtein::LevenshteinKernel;
-pub use needleman::{needleman_wunsch, needleman_wunsch_batch, needleman_wunsch_affine, needleman_wunsch_affine_batch};
-pub use jaro::{jaro, jaro_winkler, jaro_winkler_batch};
-pub use fuzz::{
-    ratio, ratio_with_cutoff, partial_ratio, partial_ratio_alignment, Alignment,
-    token_sort_ratio, token_set_ratio, token_ratio, partial_token_sort_ratio,
-    partial_token_set_ratio, partial_token_ratio, wratio, qratio, ratio_batch,
-    extract, extract_one,
+pub use needleman::{
+    needleman_wunsch, needleman_wunsch_affine, needleman_wunsch_affine_batch,
+    needleman_wunsch_batch,
 };
-pub use simd::{levenshtein_myers, needleman_wunsch_striped, jaro_optimized};
-pub use damerau::{damerau_levenshtein_distance, damerau_levenshtein_batch, damerau_levenshtein_cdist, damerau_ratio};
+pub use simd::{jaro_optimized, levenshtein_myers, needleman_wunsch_striped};
 
 /// Saturating `i64` addition that also detects overflow in debug builds.
 ///
@@ -38,7 +43,8 @@ pub(crate) fn sat_add(a: i64, b: i64) -> i64 {
     debug_assert!(
         a.checked_add(b).is_some(),
         "fuzzgpu: i64 overflow in score computation ({} + {})",
-        a, b
+        a,
+        b
     );
     r
 }
@@ -51,7 +57,8 @@ pub(crate) fn sat_mul(a: i64, b: i64) -> i64 {
     debug_assert!(
         a.checked_mul(b).is_some(),
         "fuzzgpu: i64 overflow in score computation ({} * {})",
-        a, b
+        a,
+        b
     );
     r
 }

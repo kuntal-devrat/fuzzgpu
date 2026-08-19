@@ -1,3 +1,9 @@
+#![allow(
+    clippy::manual_clamp,
+    clippy::manual_div_ceil,
+    clippy::needless_range_loop
+)]
+
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -20,19 +26,26 @@ fn damerau_bytes(a: &[u8], b: &[u8]) -> u32 {
     // so non-ASCII bytes would silently produce wrong distances due to byte-level
     // collisions between UTF-8 continuation bytes and ASCII characters.
     // This assert! fires in both debug AND release builds (PyPI wheels ship release).
-    assert!(a.is_ascii() && b.is_ascii(), "damerau_bytes requires ASCII inputs");
+    assert!(
+        a.is_ascii() && b.is_ascii(),
+        "damerau_bytes requires ASCII inputs"
+    );
     let (m, n) = (a.len(), b.len());
-    if m == 0 { return n as u32; }
-    if n == 0 { return m as u32; }
-    if a == b { return 0; }
+    if m == 0 {
+        return n as u32;
+    }
+    if n == 0 {
+        return m as u32;
+    }
+    if a == b {
+        return 0;
+    }
 
     let max_dist = (m + n) as u32;
     let cols = n + 2;
     let mut h = vec![0u32; (m + 2) * cols];
 
-    let idx = |i: isize, j: isize| -> usize {
-        ((i + 1) as usize) * cols + ((j + 1) as usize)
-    };
+    let idx = |i: isize, j: isize| -> usize { ((i + 1) as usize) * cols + ((j + 1) as usize) };
 
     h[idx(-1, -1)] = max_dist;
     for i in 0..=m {
@@ -67,7 +80,10 @@ fn damerau_bytes(a: &[u8], b: &[u8]) -> u32 {
             let del = h[idx((i - 1) as isize, j as isize)] + 1;
 
             let trans = if k > 0 && l > 0 {
-                h[idx((k - 1) as isize, (l - 1) as isize)] + ((i - k - 1) as u32) + 1 + ((j - l - 1) as u32)
+                h[idx((k - 1) as isize, (l - 1) as isize)]
+                    + ((i - k - 1) as u32)
+                    + 1
+                    + ((j - l - 1) as u32)
             } else {
                 max_dist
             };
@@ -83,17 +99,21 @@ fn damerau_bytes(a: &[u8], b: &[u8]) -> u32 {
 
 fn damerau_chars(a: &[char], b: &[char]) -> u32 {
     let (m, n) = (a.len(), b.len());
-    if m == 0 { return n as u32; }
-    if n == 0 { return m as u32; }
-    if a == b { return 0; }
+    if m == 0 {
+        return n as u32;
+    }
+    if n == 0 {
+        return m as u32;
+    }
+    if a == b {
+        return 0;
+    }
 
     let max_dist = (m + n) as u32;
     let cols = n + 2;
     let mut h = vec![0u32; (m + 2) * cols];
 
-    let idx = |i: isize, j: isize| -> usize {
-        ((i + 1) as usize) * cols + ((j + 1) as usize)
-    };
+    let idx = |i: isize, j: isize| -> usize { ((i + 1) as usize) * cols + ((j + 1) as usize) };
 
     h[idx(-1, -1)] = max_dist;
     for i in 0..=m {
@@ -128,7 +148,10 @@ fn damerau_chars(a: &[char], b: &[char]) -> u32 {
             let del = h[idx((i - 1) as isize, j as isize)] + 1;
 
             let trans = if k > 0 && l > 0 {
-                h[idx((k - 1) as isize, (l - 1) as isize)] + ((i - k - 1) as u32) + 1 + ((j - l - 1) as u32)
+                h[idx((k - 1) as isize, (l - 1) as isize)]
+                    + ((i - k - 1) as u32)
+                    + 1
+                    + ((j - l - 1) as u32)
             } else {
                 max_dist
             };
@@ -144,7 +167,10 @@ fn damerau_chars(a: &[char], b: &[char]) -> u32 {
 
 /// Batch Damerau-Levenshtein: one query vs many candidates.
 pub fn damerau_levenshtein_batch(query: &str, candidates: &[&str]) -> Vec<u32> {
-    candidates.par_iter().map(|c| damerau_levenshtein_distance(query, c)).collect()
+    candidates
+        .par_iter()
+        .map(|c| damerau_levenshtein_distance(query, c))
+        .collect()
 }
 
 /// Cross-product matrix for Damerau-Levenshtein.
@@ -152,18 +178,34 @@ pub fn damerau_levenshtein_cdist(list_a: &[&str], list_b: &[&str]) -> Vec<Vec<u3
     if list_a.is_empty() || list_b.is_empty() {
         return vec![];
     }
-    list_a.par_iter().map(|a| {
-        list_b.iter().map(|b| damerau_levenshtein_distance(a, b)).collect()
-    }).collect()
+    list_a
+        .par_iter()
+        .map(|a| {
+            list_b
+                .iter()
+                .map(|b| damerau_levenshtein_distance(a, b))
+                .collect()
+        })
+        .collect()
 }
 
 /// Damerau-Levenshtein normalized ratio (0.0 to 100.0) based on standard edit distance similarity formula:
 /// `((total_len - dist) / total_len) * 100.0`.
 pub fn damerau_ratio(s1: &str, s2: &str) -> f64 {
-    let len_a = if s1.is_ascii() { s1.len() } else { s1.chars().count() };
-    let len_b = if s2.is_ascii() { s2.len() } else { s2.chars().count() };
+    let len_a = if s1.is_ascii() {
+        s1.len()
+    } else {
+        s1.chars().count()
+    };
+    let len_b = if s2.is_ascii() {
+        s2.len()
+    } else {
+        s2.chars().count()
+    };
     let total = len_a + len_b;
-    if total == 0 { return 100.0; }
+    if total == 0 {
+        return 100.0;
+    }
     let dist = damerau_levenshtein_distance(s1, s2) as f64;
     ((total as f64 - dist) / total as f64) * 100.0
 }
@@ -171,12 +213,12 @@ pub fn damerau_ratio(s1: &str, s2: &str) -> f64 {
 #[cfg(feature = "gpu")]
 pub mod gpu_ext {
     use super::*;
-    use bytemuck::{Pod, Zeroable};
-    use std::sync::OnceLock;
     use crate::gpu::{
         BufferPool, FuzzGpuError, GpuEngine, Result, SLOT_CHARS_A, SLOT_CHARS_B, SLOT_OFFSETS_A,
         SLOT_OFFSETS_B, SLOT_PARAMS, SLOT_RESULTS, SLOT_STAGING,
     };
+    use bytemuck::{Pod, Zeroable};
+    use std::sync::OnceLock;
 
     const SHADER_SRC: &str = include_str!("shaders/damerau.wgsl");
     const MATRIX_SHADER_SRC: &str = include_str!("shaders/damerau_matrix.wgsl");
@@ -234,9 +276,9 @@ pub mod gpu_ext {
             let engine = GpuEngine::get()?;
             let kernel = Self::new_inner(engine)?;
             let _ = GLOBAL_GPU_DAMERAU_KERNEL.set(kernel);
-            GLOBAL_GPU_DAMERAU_KERNEL.get().ok_or_else(|| FuzzGpuError::NoDevice(
-                "Damerau kernel unexpectedly absent after init".into()
-            ))
+            GLOBAL_GPU_DAMERAU_KERNEL.get().ok_or_else(|| {
+                FuzzGpuError::NoDevice("Damerau kernel unexpectedly absent after init".into())
+            })
         }
 
         fn new_inner(engine: std::sync::Arc<GpuEngine>) -> Result<Self> {
@@ -252,23 +294,82 @@ pub mod gpu_ext {
                 )));
             }
 
-            let bind_group_layout = engine.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("damerau bgl"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                ],
-            });
+            let bind_group_layout =
+                engine
+                    .device
+                    .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("damerau bgl"),
+                        entries: &[
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 0,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 1,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 2,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 3,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 4,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 5,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                        ],
+                    });
 
-            let layout = engine.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
-            });
+            let layout = engine
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&bind_group_layout)],
+                    immediate_size: 0,
+                });
 
             let pipeline = engine.build_compute_pipeline(
                 "damerau pipeline",
@@ -281,7 +382,13 @@ pub mod gpu_ext {
                 &layout,
             )?;
 
-            Ok(Self { engine, pipeline, matrix_pipeline, bind_group_layout, pool: std::sync::Mutex::new(BufferPool::new()) })
+            Ok(Self {
+                engine,
+                pipeline,
+                matrix_pipeline,
+                bind_group_layout,
+                pool: std::sync::Mutex::new(BufferPool::new()),
+            })
         }
 
         /// Smart streaming GPU/CPU dispatch for batch Damerau-Levenshtein with
@@ -321,7 +428,8 @@ pub mod gpu_ext {
             }
 
             if !cpu_indices.is_empty() {
-                let cpu_results: Vec<u32> = cpu_indices.par_iter()
+                let cpu_results: Vec<u32> = cpu_indices
+                    .par_iter()
                     .map(|&i| damerau_levenshtein_distance(pairs[i].0, pairs[i].1))
                     .collect();
                 for (idx, &orig_i) in cpu_indices.iter().enumerate() {
@@ -332,7 +440,8 @@ pub mod gpu_ext {
             if gpu_indices.len() < self.engine.metric_gpu_threshold(DAMERAU_DISCRETE_FACTOR) {
                 // Below the (auto or user-set) threshold: CPU is cheaper.
                 crate::gpu::GpuEngine::record_routing(0, n);
-                let cpu_results: Vec<u32> = gpu_indices.par_iter()
+                let cpu_results: Vec<u32> = gpu_indices
+                    .par_iter()
                     .map(|&i| damerau_levenshtein_distance(pairs[i].0, pairs[i].1))
                     .collect();
                 for (idx, &orig_i) in gpu_indices.iter().enumerate() {
@@ -344,6 +453,7 @@ pub mod gpu_ext {
 
             let max_allowed_binding = self.engine.max_storage_buffer_binding_size as usize;
             let bytes_per_pair = (GPU_MAX_STRING_LEN * 4 * 2 + 8).max(128);
+            #[allow(clippy::manual_clamp)]
             let dynamic_chunk_size = (max_allowed_binding / bytes_per_pair)
                 .min(MAX_DESIRED_CHUNK_PAIRS)
                 .max(512);
@@ -364,7 +474,11 @@ pub mod gpu_ext {
             Ok(results)
         }
 
-        fn compute_gpu_subset(&self, pairs: &[(&str, &str)], indices: &[usize]) -> Result<Vec<u32>> {
+        fn compute_gpu_subset(
+            &self,
+            pairs: &[(&str, &str)],
+            indices: &[usize],
+        ) -> Result<Vec<u32>> {
             let batch_size = indices.len() as u32;
 
             // ASCII byte packing (mirrors damerau_bytes; the classification
@@ -386,8 +500,12 @@ pub mod gpu_ext {
                 max_len = max_len.max((a.len() as u32).max(b.len() as u32));
             }
 
-            if chars_a.is_empty() { chars_a.push(0); }
-            if chars_b.is_empty() { chars_b.push(0); }
+            if chars_a.is_empty() {
+                chars_a.push(0);
+            }
+            if chars_b.is_empty() {
+                chars_b.push(0);
+            }
 
             let chars_a_bytes = (chars_a.len() * 4) as u64;
             let chars_b_bytes = (chars_b.len() * 4) as u64;
@@ -406,18 +524,76 @@ pub mod gpu_ext {
             // the other kernels: ensure capacity, upload once, reuse.
             let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
             let offsets_bytes = ((offsets_a.len() * 4) as u64).max(results_size);
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_A, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "doa");
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_B, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "dob");
-            pool.ensure(&self.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "dca");
-            pool.ensure(&self.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "dcb");
-            pool.ensure(&self.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "dres");
-            pool.ensure(&self.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "dstg");
-            pool.ensure(&self.engine.device, SLOT_PARAMS, std::mem::size_of::<DamerauParams>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "dp");
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_A,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "doa",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_B,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "dob",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_A,
+                chars_a_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "dca",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_B,
+                chars_b_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "dcb",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_RESULTS,
+                results_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                "dres",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_STAGING,
+                results_size,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                "dstg",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_PARAMS,
+                std::mem::size_of::<DamerauParams>() as u64,
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                "dp",
+            );
 
-            pool.write(&self.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&offsets_a));
-            pool.write(&self.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
-            pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&offsets_b));
-            pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_A,
+                bytemuck::cast_slice(&offsets_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_A,
+                bytemuck::cast_slice(&chars_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_B,
+                bytemuck::cast_slice(&offsets_b),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_B,
+                bytemuck::cast_slice(&chars_b),
+            );
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
             let buf_chars_a = pool.get(SLOT_CHARS_A);
@@ -437,32 +613,66 @@ pub mod gpu_ext {
 
             while remaining > 0 {
                 let chunk = remaining.min(MAX_DISPATCH);
-                let params = DamerauParams { batch_size, max_len, offset };
+                let params = DamerauParams {
+                    batch_size,
+                    max_len,
+                    offset,
+                };
                 pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
-                let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None, layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 4, resource: buf_results.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
-                    ],
-                });
+                let bg = self
+                    .engine
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &self.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buf_offsets_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: buf_chars_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: buf_offsets_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: buf_chars_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: buf_results.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: buf_params.as_entire_binding(),
+                            },
+                        ],
+                    });
 
-                let mut encoder = self.engine.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("damerau encoder") });
+                let mut encoder =
+                    self.engine
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("damerau encoder"),
+                        });
                 // Workgroup size 4 (SLM budget): one workgroup per 4 pairs.
-                let workgroups = (chunk + 3) / 4;
+                let workgroups = chunk.div_ceil(4);
                 {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: None,
+                        timestamp_writes: None,
+                    });
                     pass.set_pipeline(&self.pipeline);
                     pass.set_bind_group(0, &bg, &[]);
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, buf_staging, 0, chunk_bytes);
                 let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
                 let raw: &[u32] = bytemuck::cast_slice(&bytes);
                 gpu_results.extend_from_slice(raw);
@@ -492,8 +702,12 @@ pub mod gpu_ext {
             }
             crate::gpu::GpuEngine::record_routing(total_pairs, 0);
 
-            let has_oversized = list_a.iter().any(|s| !s.is_ascii() || s.len() > GPU_MAX_STRING_LEN)
-                || list_b.iter().any(|s| !s.is_ascii() || s.len() > GPU_MAX_STRING_LEN);
+            let has_oversized = list_a
+                .iter()
+                .any(|s| !s.is_ascii() || s.len() > GPU_MAX_STRING_LEN)
+                || list_b
+                    .iter()
+                    .any(|s| !s.is_ascii() || s.len() > GPU_MAX_STRING_LEN);
 
             let matrix_size = (total_pairs as u64) * 4;
             if has_oversized || matrix_size > self.engine.max_buffer_size_effective() {
@@ -518,25 +732,90 @@ pub mod gpu_ext {
                 offsets_b.push(chars_b.len() as u32);
             }
 
-            if chars_a.is_empty() { chars_a.push(0); }
-            if chars_b.is_empty() { chars_b.push(0); }
+            if chars_a.is_empty() {
+                chars_a.push(0);
+            }
+            if chars_b.is_empty() {
+                chars_b.push(0);
+            }
 
             let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
             let offsets_bytes = ((offsets_a.len() * 4) as u64).max(matrix_size);
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_A, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "dmoa");
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_B, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "dmob");
-            pool.ensure(&self.engine.device, SLOT_CHARS_A, (chars_a.len() * 4) as u64, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "dmca");
-            pool.ensure(&self.engine.device, SLOT_CHARS_B, (chars_b.len() * 4) as u64, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "dmcb");
-            pool.ensure(&self.engine.device, SLOT_RESULTS, matrix_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "dmres");
-            pool.ensure(&self.engine.device, SLOT_STAGING, matrix_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "dmstg");
-            pool.ensure(&self.engine.device, SLOT_PARAMS, std::mem::size_of::<DamerauMatrixParams>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "dmp");
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_A,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "dmoa",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_B,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "dmob",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_A,
+                (chars_a.len() * 4) as u64,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "dmca",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_B,
+                (chars_b.len() * 4) as u64,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "dmcb",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_RESULTS,
+                matrix_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                "dmres",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_STAGING,
+                matrix_size,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                "dmstg",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_PARAMS,
+                std::mem::size_of::<DamerauMatrixParams>() as u64,
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                "dmp",
+            );
 
-            pool.write(&self.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&offsets_a));
-            pool.write(&self.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
-            pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&offsets_b));
-            pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_A,
+                bytemuck::cast_slice(&offsets_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_A,
+                bytemuck::cast_slice(&chars_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_B,
+                bytemuck::cast_slice(&offsets_b),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_B,
+                bytemuck::cast_slice(&chars_b),
+            );
 
-            let params = DamerauMatrixParams { rows: rows as u32, cols: cols as u32 };
+            let params = DamerauMatrixParams {
+                rows: rows as u32,
+                cols: cols as u32,
+            };
             pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
@@ -547,50 +826,66 @@ pub mod gpu_ext {
             let buf_staging = pool.get(SLOT_STAGING);
             let buf_params = pool.get(SLOT_PARAMS);
 
-            let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None, layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 4, resource: buf_matrix.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
-                ],
-            });
+            let bg = self
+                .engine
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buf_offsets_a.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: buf_chars_a.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: buf_offsets_b.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: buf_chars_b.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: buf_matrix.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: buf_params.as_entire_binding(),
+                        },
+                    ],
+                });
 
-            let mut encoder = self.engine.device.create_command_encoder(
-                &wgpu::CommandEncoderDescriptor { label: Some("damerau matrix encoder") },
-            );
+            let mut encoder =
+                self.engine
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("damerau matrix encoder"),
+                    });
 
-            let workgroups_x = ((cols as u32) + 3) / 4;
+            let workgroups_x = (cols as u32).div_ceil(4);
             let workgroups_y = rows as u32;
 
             {
-                let mut pass = encoder.begin_compute_pass(
-                    &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
-                );
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: None,
+                    timestamp_writes: None,
+                });
                 pass.set_pipeline(&self.matrix_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
             }
 
-            encoder.copy_buffer_to_buffer(&buf_matrix, 0, &buf_staging, 0, matrix_size);
-            self.engine.submit(encoder);
-
-            let slice = buf_staging.slice(..);
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.engine.map_readback(&slice, move |r| { let _ = tx.send(r); });
-            self.engine.poll();
-
-            rx.recv_timeout(GpuEngine::readback_timeout())
-                .map_err(|_| FuzzGpuError::Timeout("GPU Damerau matrix readback timed out after 10s".into()))?
-                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
-
-            let data = slice
-                .get_mapped_range()
-                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
-            let raw: &[u32] = bytemuck::cast_slice(&data);
+            encoder.copy_buffer_to_buffer(buf_matrix, 0, buf_staging, 0, matrix_size);
+            // Use the shared readback helper — it submits, polls, maps, copies, and unmaps
+            // the staging slot in one step, so an error return never leaves the buffer
+            // permanently mapped (the previous manual readback had that leak).
+            let bytes = self.engine.readback(encoder, &pool, matrix_size)?;
+            let raw: &[u32] = bytemuck::cast_slice(&bytes);
 
             let mut matrix: Vec<Vec<u32>> = Vec::with_capacity(rows);
             for i in 0..rows {
@@ -606,8 +901,6 @@ pub mod gpu_ext {
                 matrix.push(row);
             }
 
-            drop(data);
-            buf_staging.unmap();
             Ok(matrix)
         }
     }
@@ -621,11 +914,15 @@ pub mod gpu_ext {
             let mut state = seed;
             let mut out = Vec::with_capacity(count);
             for _ in 0..count {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 let len = 1 + ((state >> 33) as usize % 16);
                 let mut s = String::with_capacity(len);
                 for _ in 0..len {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
                 }
                 out.push(s);
@@ -661,19 +958,24 @@ pub mod gpu_ext {
         #[test]
         fn test_gpu_batch_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a = gen_strings(1000, 0xD00DCAFE);
             let b = gen_strings(1000, 0x0DDBA11);
-            let mut pairs: Vec<(&str, &str)> =
-                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+            let mut pairs: Vec<(&str, &str)> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x.as_str(), y.as_str()))
+                .collect();
             pairs[0] = ("", "");
             pairs[1] = ("", "xyz");
             pairs[2] = ("hello", "hello");
-            pairs[3] = ("ab", "ba");           // adjacent transposition
-            pairs[4] = ("ca", "abc");          // non-adjacent transposition (2)
-            pairs[5] = ("a cat", "an act");    // classic multi-transposition
+            pairs[3] = ("ab", "ba"); // adjacent transposition
+            pairs[4] = ("ca", "abc"); // non-adjacent transposition (2)
+            pairs[5] = ("a cat", "an act"); // classic multi-transposition
             pairs[6] = ("sitting", "kitten");
             // > 32 chars must route to CPU inside compute_batch.
             let long_a = "a".repeat(40);
@@ -683,20 +985,28 @@ pub mod gpu_ext {
             pairs.push((&long_a, &long_b));
             pairs.push((&long_c, &long_d));
 
-            let gpu = kernel.compute_batch(&pairs).expect("GPU batch should succeed");
-            let cpu: Vec<u32> = pairs.iter()
+            let gpu = kernel
+                .compute_batch(&pairs)
+                .expect("GPU batch should succeed");
+            let cpu: Vec<u32> = pairs
+                .iter()
                 .map(|(x, y)| damerau_levenshtein_distance(x, y))
                 .collect();
             assert_eq!(gpu, cpu, "GPU Damerau batch must match CPU");
             // The u32::MAX sentinel must never leak.
-            assert!(gpu.iter().all(|&d| d != u32::MAX), "u32::MAX sentinel leaked");
+            assert!(
+                gpu.iter().all(|&d| d != u32::MAX),
+                "u32::MAX sentinel leaked"
+            );
         }
 
         /// 2D matrix path vs the CPU cdist reference.
         #[test]
         fn test_gpu_matrix_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a = gen_strings(30, 0x13579BDF);
@@ -704,7 +1014,9 @@ pub mod gpu_ext {
             let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
             let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
 
-            let gpu = kernel.compute_matrix(&refs_a, &refs_b).expect("GPU matrix should succeed");
+            let gpu = kernel
+                .compute_matrix(&refs_a, &refs_b)
+                .expect("GPU matrix should succeed");
             let cpu = damerau_levenshtein_cdist(&refs_a, &refs_b);
             assert_eq!(gpu, cpu, "GPU Damerau matrix must match CPU");
         }
@@ -776,5 +1088,146 @@ mod tests {
     fn test_damerau_bytes_rejects_non_ascii_release() {
         // Verify the assert! (not debug_assert!) fires in release builds too.
         let _ = damerau_bytes("café".as_bytes(), b"cafe");
+    }
+
+    // ── New comprehensive tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_damerau_vs_levenshtein_transpositions_cheaper() {
+        // Damerau adds transpositions to the op set → always ≤ Levenshtein.
+        use crate::levenshtein::levenshtein_distance_raw;
+        let pairs = [
+            ("ab", "ba"),
+            ("abc", "bac"),
+            ("kitten", "kittne"),
+            ("ca", "abc"),
+        ];
+        for (a, b) in &pairs {
+            let dl = damerau_levenshtein_distance(a, b);
+            let lev = levenshtein_distance_raw(a, b);
+            assert!(dl <= lev, "damerau({a:?},{b:?})={dl} > lev={lev}");
+        }
+    }
+
+    #[test]
+    fn test_damerau_symmetry() {
+        let pairs = [
+            ("ab", "ba"),
+            ("kitten", "sitting"),
+            ("café", "cafe"),
+            ("", "x"),
+        ];
+        for (a, b) in &pairs {
+            let ab = damerau_levenshtein_distance(a, b);
+            let ba = damerau_levenshtein_distance(b, a);
+            assert_eq!(ab, ba, "damerau not symmetric for ({a:?},{b:?})");
+        }
+    }
+
+    #[test]
+    fn test_damerau_length_diff_lower_bound() {
+        // Every edit changes length by at most 1, so dist ≥ |len_a - len_b|.
+        let pairs = [("ab", "abcde"), ("hello", ""), ("a", "abcdefghij")];
+        for (a, b) in &pairs {
+            let d = damerau_levenshtein_distance(a, b);
+            let la = a.chars().count() as i64;
+            let lb = b.chars().count() as i64;
+            let diff = (la - lb).unsigned_abs() as u32;
+            assert!(d >= diff, "damerau({a:?},{b:?})={d} < |len diff|={diff}");
+        }
+    }
+
+    #[test]
+    fn test_damerau_batch_matches_serial() {
+        let query = "algorithm";
+        let cands = vec![
+            "algorithmm",
+            "algortihm",
+            "algorithms",
+            "",
+            "algorithm",
+            "ALGORITHM",
+        ];
+        let batch = damerau_levenshtein_batch(query, &cands);
+        for (i, c) in cands.iter().enumerate() {
+            let expected = damerau_levenshtein_distance(query, c);
+            assert_eq!(batch[i], expected, "damerau_batch[{i}] mismatch for {c:?}");
+        }
+    }
+
+    #[test]
+    fn test_damerau_cdist_matches_per_pair() {
+        let list_a = vec!["ab", "cd", "ef"];
+        let list_b = vec!["ba", "dc", "fe", ""];
+        let matrix = damerau_levenshtein_cdist(&list_a, &list_b);
+        assert_eq!(matrix.len(), 3);
+        assert_eq!(matrix[0].len(), 4);
+        for (i, a) in list_a.iter().enumerate() {
+            for (j, b) in list_b.iter().enumerate() {
+                let expected = damerau_levenshtein_distance(a, b);
+                assert_eq!(matrix[i][j], expected, "cdist[{i}][{j}] mismatch");
+            }
+        }
+    }
+
+    #[test]
+    fn test_damerau_cdist_empty_lists() {
+        let empty: &[&str] = &[];
+        assert_eq!(
+            damerau_levenshtein_cdist(empty, empty),
+            Vec::<Vec<u32>>::new()
+        );
+        assert_eq!(
+            damerau_levenshtein_cdist(&["a"], empty),
+            Vec::<Vec<u32>>::new()
+        );
+        assert_eq!(
+            damerau_levenshtein_cdist(empty, &["b"]),
+            Vec::<Vec<u32>>::new()
+        );
+    }
+
+    #[test]
+    fn test_damerau_ratio_identical_is_100() {
+        assert_eq!(damerau_ratio("hello", "hello"), 100.0);
+        assert_eq!(damerau_ratio("", ""), 100.0);
+    }
+
+    #[test]
+    fn test_damerau_ratio_transposition() {
+        // "ab" vs "ba": dist=1, len_sum=4, ratio = (4-1)/4 * 100 = 75.0
+        let r = damerau_ratio("ab", "ba");
+        assert!((r - 75.0).abs() < 0.01, "Expected 75.0, got {r}");
+    }
+
+    #[test]
+    fn test_damerau_ratio_empty_one_side_is_zero() {
+        assert_eq!(damerau_ratio("abc", ""), 0.0);
+        assert_eq!(damerau_ratio("", "abc"), 0.0);
+    }
+
+    #[test]
+    fn test_damerau_ratio_range() {
+        for (a, b) in &[("kitten", "sitting"), ("abc", "xyz"), ("a", ""), ("x", "x")] {
+            let r = damerau_ratio(a, b);
+            assert!(
+                (0.0..=100.0).contains(&r),
+                "damerau_ratio out of range: {r} for ({a:?},{b:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_damerau_unicode_multibyte() {
+        // "日本語" vs "日語本": one transposition of 語/本
+        let d = damerau_levenshtein_distance("日本語", "日語本");
+        assert!(d <= 2, "Expected ≤ 2, got {d}");
+        assert_eq!(damerau_levenshtein_distance("日本語", "日本語"), 0);
+    }
+
+    #[test]
+    fn test_damerau_emoji_distance() {
+        assert_eq!(damerau_levenshtein_distance("🚀🌟", "🌟🚀"), 1);
+        assert_eq!(damerau_levenshtein_distance("🚀", "🌟"), 1);
     }
 }

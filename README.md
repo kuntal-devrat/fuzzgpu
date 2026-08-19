@@ -8,7 +8,7 @@
 
 *Cross-platform GPU compute via WebGPU (`wgpu`) & Multi-Core CPU parallelism with Rayon. Zero CUDA dependencies.*
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.1.8-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.2.0-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg?style=flat-square)](https://www.rust-lang.org)
 [![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
@@ -31,7 +31,7 @@ No NVIDIA CUDA drivers or complex toolkits required.
 
 ---
 
-## What's New in v0.1.8
+## What's New in v0.2.0
 
 ### Production hardening
 - **Kernel `get()` panics eliminated** — all four GPU kernels (`GpuLevenshteinKernel`,
@@ -135,7 +135,7 @@ The full Python layer is now byte-identical to rapidfuzz 3.14.5 over a 169,744-p
 ## Benchmark Results
 
 *Hardware: Intel(R) Iris(R) Xe Graphics — integrated GPU (Vulkan) + Intel Core i7 (Rayon, all cores)*
-*Versions: fuzzgpu 0.1.9 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
+*Versions: fuzzgpu 0.2.0 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
 *Median of 7 runs after warmup. Reproduce: `python benchmarks/bench_compare.py`*
 
 > **GPU class note:** These numbers are from an **integrated GPU** (iGPU), which shares memory
@@ -200,7 +200,7 @@ pip install fuzzgpu
 ```toml
 # Rust
 [dependencies]
-fuzzgpu-core = "0.1.9"
+fuzzgpu-core = "0.2.0"
 ```
 
 ---
@@ -296,7 +296,7 @@ fuzzgpu.set_cpu_only(True)       # force CPU-only mode
 
 ```toml
 [dependencies]
-fuzzgpu-core = "0.1.9"                                        # GPU + CPU fallback
+fuzzgpu-core = "0.2.0"                                        # GPU + CPU fallback
 # fuzzgpu-core = { version = "0.1.7", default-features = false } # CPU-only
 ```
 

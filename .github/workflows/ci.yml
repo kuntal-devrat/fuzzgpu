@@ -16,13 +16,45 @@ on:
     - cron: '0 2 * * *'
 
 jobs:
+  # ── Lint / format / clippy ──────────────────────────────────────────────────
+  lint:
+    name: Lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (workspace)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: cargo clippy (fuzz crate)
+        run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
+  # ── Dependency audit ────────────────────────────────────────────────────────
+  deny:
+    name: cargo deny (license + security audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses advisories
+
+  # ── Cross-platform / multi-Python matrix ────────────────────────────────────
   test:
     name: Test on ${{ matrix.os }} (Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +90,31 @@ jobs:
       - name: Run Python Test Suite
         run: pytest tests -v
 
+  # ── Python 3.13 free-threaded build ─────────────────────────────────────────
+  test-free-threaded:
+    name: Python 3.13t free-threaded smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13t (free-threaded)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13t'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pip install maturin pytest numpy rapidfuzz
+
+      - name: Build & install extension (free-threaded)
+        run: pip install .
+
+      - name: Smoke test under free-threaded interpreter
+        run: pytest tests/test_basic.py tests/test_edge_cases.py -v
+
+  # ── SIMD NEON (native arm64 runner) ─────────────────────────────────────────
   simd-arm64:
     name: SIMD NEON tests (native arm64 runner)
     runs-on: ubuntu-24.04-arm
@@ -73,6 +130,7 @@ jobs:
       - name: Run SIMD kernel tests (NEON path)
         run: cargo test -p fuzzgpu-core --lib simd
 
+  # ── GPU differential (Metal backend, macOS) ──────────────────────────────────
   gpu-metal:
     name: GPU differential tests (Metal backend)
     runs-on: macos-latest
@@ -97,6 +155,7 @@ jobs:
           WGPU_BACKEND: metal
         run: cargo test -p fuzzgpu-core --lib gpu
 
+  # ── Fuzz self-harness ────────────────────────────────────────────────────────
   fuzz:
     name: Fuzz self-harness (stable differential drivers)
     runs-on: ubuntu-latest
@@ -115,6 +174,7 @@ jobs:
       - name: Run fuzz self-harness
         run: cargo test --manifest-path fuzz/Cargo.toml --lib --release
 
+  # ── GPU differential (software Vulkan, Linux) ────────────────────────────────
   gpu-differential:
     name: GPU differential tests (software Vulkan)
     runs-on: ubuntu-latest
@@ -150,6 +210,7 @@ jobs:
           WGPU_BACKEND: vulkan
         run: cargo test -p fuzzgpu-core --lib gpu
 
+  # ── GPU stress / timeout determinism ─────────────────────────────────────────
   gpu-stress:
     name: GPU timeout determinism (serialized loop)
     runs-on: ubuntu-latest
@@ -172,9 +233,7 @@ jobs:
       # timeout/buffer/shader tests — with FUZZGPU_REQUIRE_GPU=1, so a missing
       # device fails instead of skipping. GPU_TEST_DISPATCH_LOCK serializes
       # actual dispatch while tests still run on parallel threads; the loop
-      # continuously verifies the timeout faults stay deterministic. This is
-      # the same stress pattern that exposed the parallel-dispatch crash on
-      # Intel iGPUs during local testing.
+      # continuously verifies the timeout faults stay deterministic.
       - name: Run GPU suite in a serialized loop
         env:
           FUZZGPU_REQUIRE_GPU: '1'
@@ -196,6 +255,7 @@ jobs:
           done
           echo "GPU suite: all ${ITERATIONS} iterations passed"
 
+  # ── Deep differential (64 proptest cases) ────────────────────────────────────
   differential-deep:
     name: Differential proptests (64 cases)
     runs-on: ubuntu-latest
@@ -218,8 +278,6 @@ jobs:
       # differentials' case count follows PROPTEST_CASES too, so this deep-
       # fuzzes the whole harness — CPU differentials and GPU-vs-oracle alike.
       # FUZZGPU_REQUIRE_GPU keeps the GPU tests honest on the software adapter.
-      # ~8 s at 64 cases on a real GPU; slower on lavapipe but well within
-      # limits, and it runs in parallel with the other jobs.
       - name: Run differential suite at 64 cases
         env:
           PROPTEST_CASES: '64'
@@ -227,6 +285,7 @@ jobs:
           WGPU_BACKEND: vulkan
         run: cargo test -p fuzzgpu-core --test differential
 
+  # ── Nightly deep-fuzz tier ────────────────────────────────────────────────────
   differential-nightly:
     # Nightly-only deep-fuzz tier. Gated so it never runs on push/PR (where
     # differential-deep at 64 cases already gates the GPU paths); on a schedule
@@ -253,9 +312,8 @@ jobs:
       # Nightly deep-fuzz tier: 256 cases (4x the push-time 64, 25.6x the
       # default 10). The GPU differentials follow PROPTEST_CASES, so this
       # deep-fuzzes the whole harness — CPU differentials and GPU-vs-oracle
-      # alike — on the software adapter. Measured ~33 s at 256 cases on a real
-      # GPU; slower on lavapipe but comfortable for a nightly. Catches rare
-      # regressions that a 10-case push run would miss.
+      # alike — on the software adapter. Catches rare regressions that a
+      # 10-case push run would miss.
       - name: Run differential suite at ${{ inputs.differential-cases }} cases
         env:
           PROPTEST_CASES: ${{ inputs.differential-cases }}
@@ -263,6 +321,7 @@ jobs:
           WGPU_BACKEND: vulkan
         run: cargo test -p fuzzgpu-core --test differential
 
+  # ── WebAssembly tests ─────────────────────────────────────────────────────────
   wasm-tests:
     name: WebAssembly tests (BigInt API)
     runs-on: ubuntu-latest
@@ -284,24 +343,13 @@ jobs:
       - name: Run wasm-bindgen tests (Node)
         run: cd crates/fuzzgpu-wasm && wasm-pack test --node
 
-      # Run the same #[wasm_bindgen_test] suite in a real browser engine, not
-      # just Node — wasm-pack drives Chrome through chromedriver (installed
-      # alongside by setup-chrome), so this catches browser-specific wasm
-      # behavior (e.g. WebAssembly.Module semantics, BigInt interop paths) that
-      # Node's different embedding would never exercise.
-      #
-      # WASM_BINDGEN_USE_BROWSER=1 is REQUIRED: wasm-bindgen-test defaults to
-      # Node mode, and wasm-pack's --chrome sets WASM_BINDGEN_TEST_ONLY_WEB but
-      # not the USE_* vars — without it the runner silently skips every test
-      # ("only configured to run in node.js") and the step would pass testing
-      # nothing. The env var (rather than wasm_bindgen_test_configure!
-      # (run_in_browser), which would flip the Node step to skip instead)
-      # lets the same source run in both engines.
       - name: Install Chrome + chromedriver
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
 
+      # WASM_BINDGEN_USE_BROWSER=1 is required so the runner doesn't silently
+      # skip every test ("only configured to run in node.js").
       - name: Run wasm-bindgen tests (headless Chrome)
         env:
           WASM_BINDGEN_USE_BROWSER: '1'
@@ -316,6 +364,7 @@ jobs:
           wasm-pack build --target nodejs --out-dir target/wasm-api-check
           node tests/js_api.test.cjs target/wasm-api-check/fuzzgpu_wasm.js
 
+  # ── wasm build script (release pkg) ──────────────────────────────────────────
   wasm-build:
     name: wasm build script (release pkg)
     runs-on: ubuntu-latest
@@ -359,6 +408,7 @@ jobs:
           wasm-pack build --target nodejs --release --out-dir ../../pkg-release-check
           node tests/js_api.test.cjs ../../pkg-release-check/fuzzgpu_wasm.js
 
+  # ── wasm ↔ Python differential ────────────────────────────────────────────────
   wasm-python-differential:
     # Cross-language differential: the same fixed corpus is computed through
     # the JS wasm exports (differential_harness.js) and through the Python
@@ -397,3 +447,49 @@ jobs:
 
       - name: Compare against Python bindings
         run: python tests/wasm_python_differential.py target/wasm-diff-check/results.json
+
+  # ── Release gate: all required jobs must pass ─────────────────────────────────
+  ci-gate:
+    name: CI Gate (all required jobs pass)
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+      - deny
+      - test
+      - simd-arm64
+      - gpu-metal
+      - fuzz
+      - gpu-differential
+      - gpu-stress
+      - differential-deep
+      - wasm-tests
+      - wasm-build
+      - wasm-python-differential
+      - plain-build
+      - docs
+    steps:
+      - run: echo "All required CI jobs passed"
+
+  # ── Plain Rust build (no default features) ───────────────────────────────────
+  plain-build:
+    name: Plain Rust build (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cargo build (no default features — CPU-only fallback)
+        run: cargo build --workspace --no-default-features
+      - name: Cargo check tests (no default features)
+        run: cargo test --workspace --lib --no-default-features --no-run
+
+  # ── Docs build ───────────────────────────────────────────────────────────────
+  docs:
+    name: Cargo docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo doc for fuzzgpu-core (core crate)
+        run: cargo doc -p fuzzgpu-core --no-deps
+      - name: cargo doc for fuzzgpu-wasm (wasm crate)
+        run: cargo doc -p fuzzgpu-wasm --no-deps

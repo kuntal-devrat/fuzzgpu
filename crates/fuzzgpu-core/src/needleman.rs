@@ -1,3 +1,9 @@
+#![allow(
+    clippy::manual_clamp,
+    clippy::manual_div_ceil,
+    clippy::needless_range_loop
+)]
+
 use crate::{sat_add, sat_mul};
 use rayon::prelude::*;
 
@@ -6,9 +12,21 @@ use rayon::prelude::*;
 /// Uses single-row DP + scalar diagonal for minimal memory.
 /// Supports both ASCII fast-path and full Unicode characters.
 /// All scores use `i64` with saturating arithmetic to prevent integer overflow on long sequences.
-pub fn needleman_wunsch(a: &str, b: &str, match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
+pub fn needleman_wunsch(
+    a: &str,
+    b: &str,
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
+) -> i64 {
     if a.is_ascii() && b.is_ascii() {
-        needleman_wunsch_bytes(a.as_bytes(), b.as_bytes(), match_score, mismatch_score, gap_penalty)
+        needleman_wunsch_bytes(
+            a.as_bytes(),
+            b.as_bytes(),
+            match_score,
+            mismatch_score,
+            gap_penalty,
+        )
     } else {
         let a_chars: Vec<char> = a.chars().collect();
         let b_chars: Vec<char> = b.chars().collect();
@@ -16,20 +34,44 @@ pub fn needleman_wunsch(a: &str, b: &str, match_score: i64, mismatch_score: i64,
     }
 }
 
-fn needleman_wunsch_bytes(a: &[u8], b: &[u8], match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
+fn needleman_wunsch_bytes(
+    a: &[u8],
+    b: &[u8],
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
+) -> i64 {
     needleman_wunsch_slice(a, b, match_score, mismatch_score, gap_penalty)
 }
 
-fn needleman_wunsch_chars(a: &[char], b: &[char], match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
+fn needleman_wunsch_chars(
+    a: &[char],
+    b: &[char],
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
+) -> i64 {
     needleman_wunsch_slice(a, b, match_score, mismatch_score, gap_penalty)
 }
 
-fn needleman_wunsch_slice<T: PartialEq>(a: &[T], b: &[T], match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
+fn needleman_wunsch_slice<T: PartialEq>(
+    a: &[T],
+    b: &[T],
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
+) -> i64 {
     let (m, n) = (a.len(), b.len());
 
-    if m == 0 { return sat_mul(n as i64, gap_penalty); }
-    if n == 0 { return sat_mul(m as i64, gap_penalty); }
-    if a == b { return sat_mul(m as i64, match_score); }
+    if m == 0 {
+        return sat_mul(n as i64, gap_penalty);
+    }
+    if n == 0 {
+        return sat_mul(m as i64, gap_penalty);
+    }
+    if a == b {
+        return sat_mul(m as i64, match_score);
+    }
 
     let mut row = vec![0i64; n + 1];
     for (j, item) in row.iter_mut().enumerate() {
@@ -42,7 +84,11 @@ fn needleman_wunsch_slice<T: PartialEq>(a: &[T], b: &[T], match_score: i64, mism
         let ai = &a[i - 1];
         for j in 1..=n {
             let old = row[j];
-            let score = if ai == &b[j - 1] { match_score } else { mismatch_score };
+            let score = if ai == &b[j - 1] {
+                match_score
+            } else {
+                mismatch_score
+            };
             row[j] = sat_add(prev_diag, score)
                 .max(sat_add(row[j], gap_penalty))
                 .max(sat_add(row[j - 1], gap_penalty));
@@ -54,12 +100,16 @@ fn needleman_wunsch_slice<T: PartialEq>(a: &[T], b: &[T], match_score: i64, mism
 
 /// Batch Needleman-Wunsch with linear gap penalty.
 pub fn needleman_wunsch_batch(
-    query: &str, candidates: &[&str],
-    match_score: i64, mismatch_score: i64, gap_penalty: i64,
+    query: &str,
+    candidates: &[&str],
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
 ) -> Vec<i64> {
-    candidates.par_iter().map(|c| {
-        needleman_wunsch(query, c, match_score, mismatch_score, gap_penalty)
-    }).collect()
+    candidates
+        .par_iter()
+        .map(|c| needleman_wunsch(query, c, match_score, mismatch_score, gap_penalty))
+        .collect()
 }
 
 const NEG_INF: i64 = -1_000_000_000_000_000_000;
@@ -76,11 +126,25 @@ pub fn needleman_wunsch_affine(
     gap_extend: i64,
 ) -> i64 {
     if a.is_ascii() && b.is_ascii() {
-        needleman_wunsch_affine_slice(a.as_bytes(), b.as_bytes(), match_score, mismatch_score, gap_open, gap_extend)
+        needleman_wunsch_affine_slice(
+            a.as_bytes(),
+            b.as_bytes(),
+            match_score,
+            mismatch_score,
+            gap_open,
+            gap_extend,
+        )
     } else {
         let a_chars: Vec<char> = a.chars().collect();
         let b_chars: Vec<char> = b.chars().collect();
-        needleman_wunsch_affine_slice(&a_chars, &b_chars, match_score, mismatch_score, gap_open, gap_extend)
+        needleman_wunsch_affine_slice(
+            &a_chars,
+            &b_chars,
+            match_score,
+            mismatch_score,
+            gap_open,
+            gap_extend,
+        )
     }
 }
 
@@ -94,10 +158,18 @@ fn needleman_wunsch_affine_slice<T: PartialEq>(
 ) -> i64 {
     let (m, n) = (a.len(), b.len());
 
-    if m == 0 && n == 0 { return 0; }
-    if m == 0 { return sat_add(gap_open, sat_mul(n as i64, gap_extend)); }
-    if n == 0 { return sat_add(gap_open, sat_mul(m as i64, gap_extend)); }
-    if a == b { return sat_mul(m as i64, match_score); }
+    if m == 0 && n == 0 {
+        return 0;
+    }
+    if m == 0 {
+        return sat_add(gap_open, sat_mul(n as i64, gap_extend));
+    }
+    if n == 0 {
+        return sat_add(gap_open, sat_mul(m as i64, gap_extend));
+    }
+    if a == b {
+        return sat_mul(m as i64, match_score);
+    }
 
     let mut m_row = vec![NEG_INF; n + 1];
     let mut ix_row = vec![NEG_INF; n + 1];
@@ -124,7 +196,11 @@ fn needleman_wunsch_affine_slice<T: PartialEq>(
 
         for j in 1..=n {
             let bj = &b[j - 1];
-            let sub_score = if ai == bj { match_score } else { mismatch_score };
+            let sub_score = if ai == bj {
+                match_score
+            } else {
+                mismatch_score
+            };
 
             let prev_diag_best = prev_m_diag.max(prev_ix_diag).max(prev_iy_diag);
             let new_m = sat_add(prev_diag_best, sub_score);
@@ -158,20 +234,23 @@ pub fn needleman_wunsch_affine_batch(
     gap_open: i64,
     gap_extend: i64,
 ) -> Vec<i64> {
-    candidates.par_iter().map(|c| {
-        needleman_wunsch_affine(query, c, match_score, mismatch_score, gap_open, gap_extend)
-    }).collect()
+    candidates
+        .par_iter()
+        .map(|c| {
+            needleman_wunsch_affine(query, c, match_score, mismatch_score, gap_open, gap_extend)
+        })
+        .collect()
 }
 
 #[cfg(feature = "gpu")]
 pub mod gpu_ext {
     use super::*;
-    use bytemuck::{Pod, Zeroable};
-    use std::sync::OnceLock;
     use crate::gpu::{
         BufferPool, FuzzGpuError, GpuEngine, Result, SLOT_CHARS_A, SLOT_CHARS_B, SLOT_OFFSETS_A,
         SLOT_OFFSETS_B, SLOT_PARAMS, SLOT_RESULTS, SLOT_STAGING,
     };
+    use bytemuck::{Pod, Zeroable};
+    use std::sync::OnceLock;
 
     const SHADER_SRC: &str = include_str!("shaders/needleman_affine.wgsl");
     // Anti-diagonal wavefront kernel (one workgroup per pair, all cells of a
@@ -214,35 +293,41 @@ pub mod gpu_ext {
 
     impl GpuNeedlemanAffineKernel {
         pub fn get() -> Result<&'static Self> {
-            if let Some(k) = GLOBAL_GPU_KERNEL.get() { return Ok(k); }
+            if let Some(k) = GLOBAL_GPU_KERNEL.get() {
+                return Ok(k);
+            }
             let engine = GpuEngine::get()?;
             let kernel = Self::new_inner(engine)?;
             let _ = GLOBAL_GPU_KERNEL.set(kernel);
-            GLOBAL_GPU_KERNEL.get().ok_or_else(|| FuzzGpuError::NoDevice(
-                "Needleman kernel unexpectedly absent after init".into()
-            ))
+            GLOBAL_GPU_KERNEL.get().ok_or_else(|| {
+                FuzzGpuError::NoDevice("Needleman kernel unexpectedly absent after init".into())
+            })
         }
 
         fn new_inner(engine: std::sync::Arc<GpuEngine>) -> Result<Self> {
             let bind_group_layout =
-                engine.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("needleman-affine bgl"),
-                    entries: &[
-                        bg_entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
-                        bg_entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
-                        bg_entry(2, wgpu::BufferBindingType::Storage { read_only: true }),
-                        bg_entry(3, wgpu::BufferBindingType::Storage { read_only: true }),
-                        bg_entry(4, wgpu::BufferBindingType::Storage { read_only: false }),
-                        bg_entry(5, wgpu::BufferBindingType::Uniform),
-                    ],
+                engine
+                    .device
+                    .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("needleman-affine bgl"),
+                        entries: &[
+                            bg_entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
+                            bg_entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
+                            bg_entry(2, wgpu::BufferBindingType::Storage { read_only: true }),
+                            bg_entry(3, wgpu::BufferBindingType::Storage { read_only: true }),
+                            bg_entry(4, wgpu::BufferBindingType::Storage { read_only: false }),
+                            bg_entry(5, wgpu::BufferBindingType::Uniform),
+                        ],
+                    });
+            let layout = engine
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    // wgpu 30 wraps bind group layouts in `Option` and replaces
+                    // `push_constant_ranges` with `immediate_size` (0 = none).
+                    bind_group_layouts: &[Some(&bind_group_layout)],
+                    immediate_size: 0,
                 });
-            let layout = engine.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                // wgpu 30 wraps bind group layouts in `Option` and replaces
-                // `push_constant_ranges` with `immediate_size` (0 = none).
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
-            });
             let pipeline = engine.build_compute_pipeline(
                 "needleman-affine pipeline",
                 &crate::gpu::effective_shader_source(SHADER_SRC),
@@ -253,7 +338,13 @@ pub mod gpu_ext {
                 &crate::gpu::effective_shader_source(WAVEFRONT_SHADER_SRC),
                 &layout,
             )?;
-            Ok(Self { engine, pipeline, wavefront_pipeline, bind_group_layout, pool: std::sync::Mutex::new(BufferPool::new()) })
+            Ok(Self {
+                engine,
+                pipeline,
+                wavefront_pipeline,
+                bind_group_layout,
+                pool: std::sync::Mutex::new(BufferPool::new()),
+            })
         }
 
         /// GPU/CPU batch for affine-gap Needleman-Wunsch (Gotoh).
@@ -283,7 +374,9 @@ pub mod gpu_ext {
             // Serialize GPU dispatch across threads (gfx-rs/wgpu#10085).
             let _dispatch = self.engine.dispatch_lock();
             let n = pairs.len();
-            if n == 0 { return Ok(vec![]); }
+            if n == 0 {
+                return Ok(vec![]);
+            }
 
             // f32 precision guard: the GPU shader computes scores in f32 (WGSL
             // has no i64).  f32 can represent every integer exactly up to 2^24
@@ -301,8 +394,18 @@ pub mod gpu_ext {
             if worst_case > F32_EXACT_MAX as u64 {
                 // Scoring parameters exceed f32 exact range — use CPU for the
                 // whole batch (same semantics, no precision loss).
-                return Ok(pairs.par_iter()
-                    .map(|(a, b)| needleman_wunsch_affine(a, b, match_score, mismatch_score, gap_open, gap_extend))
+                return Ok(pairs
+                    .par_iter()
+                    .map(|(a, b)| {
+                        needleman_wunsch_affine(
+                            a,
+                            b,
+                            match_score,
+                            mismatch_score,
+                            gap_open,
+                            gap_extend,
+                        )
+                    })
                     .collect());
             }
 
@@ -311,7 +414,8 @@ pub mod gpu_ext {
             let mut cpu_indices: Vec<usize> = Vec::new();
 
             for (i, (a, b)) in pairs.iter().enumerate() {
-                if a.chars().count() > GPU_MAX_STRING_LEN || b.chars().count() > GPU_MAX_STRING_LEN {
+                if a.chars().count() > GPU_MAX_STRING_LEN || b.chars().count() > GPU_MAX_STRING_LEN
+                {
                     cpu_indices.push(i);
                 } else {
                     gpu_indices.push(i);
@@ -319,8 +423,18 @@ pub mod gpu_ext {
             }
 
             if !cpu_indices.is_empty() {
-                let cpu_results: Vec<i64> = cpu_indices.par_iter()
-                    .map(|&i| needleman_wunsch_affine(pairs[i].0, pairs[i].1, match_score, mismatch_score, gap_open, gap_extend))
+                let cpu_results: Vec<i64> = cpu_indices
+                    .par_iter()
+                    .map(|&i| {
+                        needleman_wunsch_affine(
+                            pairs[i].0,
+                            pairs[i].1,
+                            match_score,
+                            mismatch_score,
+                            gap_open,
+                            gap_extend,
+                        )
+                    })
                     .collect();
                 for (idx, &orig_i) in cpu_indices.iter().enumerate() {
                     results[orig_i] = cpu_results[idx];
@@ -330,8 +444,18 @@ pub mod gpu_ext {
             if gpu_indices.is_empty() || gpu_indices.len() < self.engine.effective_gpu_threshold() {
                 // Below the (auto or user-set) threshold: CPU is cheaper.
                 crate::gpu::GpuEngine::record_routing(0, n);
-                let cpu_results: Vec<i64> = gpu_indices.par_iter()
-                    .map(|&i| needleman_wunsch_affine(pairs[i].0, pairs[i].1, match_score, mismatch_score, gap_open, gap_extend))
+                let cpu_results: Vec<i64> = gpu_indices
+                    .par_iter()
+                    .map(|&i| {
+                        needleman_wunsch_affine(
+                            pairs[i].0,
+                            pairs[i].1,
+                            match_score,
+                            mismatch_score,
+                            gap_open,
+                            gap_extend,
+                        )
+                    })
                     .collect();
                 for (idx, &orig_i) in gpu_indices.iter().enumerate() {
                     results[orig_i] = cpu_results[idx];
@@ -349,12 +473,22 @@ pub mod gpu_ext {
 
             for stream_chunk in gpu_indices.chunks(dynamic_chunk_size) {
                 let chunk_results = self.compute_gpu_chunk(
-                    pairs, stream_chunk, match_score, mismatch_score, gap_open, gap_extend,
+                    pairs,
+                    stream_chunk,
+                    match_score,
+                    mismatch_score,
+                    gap_open,
+                    gap_extend,
                 )?;
                 for (idx, &orig_i) in stream_chunk.iter().enumerate() {
                     if chunk_results[idx] < SENTINEL_THRESHOLD {
                         results[orig_i] = needleman_wunsch_affine(
-                            pairs[orig_i].0, pairs[orig_i].1, match_score, mismatch_score, gap_open, gap_extend,
+                            pairs[orig_i].0,
+                            pairs[orig_i].1,
+                            match_score,
+                            mismatch_score,
+                            gap_open,
+                            gap_extend,
                         );
                     } else {
                         results[orig_i] = chunk_results[idx] as i64;
@@ -391,8 +525,12 @@ pub mod gpu_ext {
                 offsets_b.push(chars_b.len() as u32);
             }
 
-            if chars_a.is_empty() { chars_a.push(0); }
-            if chars_b.is_empty() { chars_b.push(0); }
+            if chars_a.is_empty() {
+                chars_a.push(0);
+            }
+            if chars_b.is_empty() {
+                chars_b.push(0);
+            }
 
             // Validate total buffer allocations against hardware max binding size.
             let chars_a_bytes = (chars_a.len() * 4) as u64;
@@ -411,18 +549,76 @@ pub mod gpu_ext {
             // the other kernels: ensure capacity, upload once, reuse.
             let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
             let offsets_bytes = ((offsets_a.len() * 4) as u64).max(results_size);
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_A, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "oa");
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_B, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "ob");
-            pool.ensure(&self.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "ca");
-            pool.ensure(&self.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "cb");
-            pool.ensure(&self.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "res");
-            pool.ensure(&self.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "stg");
-            pool.ensure(&self.engine.device, SLOT_PARAMS, std::mem::size_of::<Params>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "p");
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_A,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "oa",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_B,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "ob",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_A,
+                chars_a_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "ca",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_B,
+                chars_b_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "cb",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_RESULTS,
+                results_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                "res",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_STAGING,
+                results_size,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                "stg",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_PARAMS,
+                std::mem::size_of::<Params>() as u64,
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                "p",
+            );
 
-            pool.write(&self.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&offsets_a));
-            pool.write(&self.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
-            pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&offsets_b));
-            pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_A,
+                bytemuck::cast_slice(&offsets_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_A,
+                bytemuck::cast_slice(&chars_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_B,
+                bytemuck::cast_slice(&offsets_b),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_B,
+                bytemuck::cast_slice(&chars_b),
+            );
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
             let buf_chars_a = pool.get(SLOT_CHARS_A);
@@ -451,33 +647,58 @@ pub mod gpu_ext {
                 };
                 pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
-                let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 4, resource: buf_results.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
-                    ],
-                });
+                let bg = self
+                    .engine
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &self.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buf_offsets_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: buf_chars_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: buf_offsets_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: buf_chars_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: buf_results.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: buf_params.as_entire_binding(),
+                            },
+                        ],
+                    });
 
-                let mut encoder = self.engine.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("affine enc") },
-                );
-                let workgroups = (chunk + 15) / 16;
+                let mut encoder =
+                    self.engine
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("affine enc"),
+                        });
+                let workgroups = chunk.div_ceil(16);
                 {
-                    let mut pass = encoder.begin_compute_pass(
-                        &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
-                    );
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: None,
+                        timestamp_writes: None,
+                    });
                     pass.set_pipeline(&self.pipeline);
                     pass.set_bind_group(0, &bg, &[]);
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, buf_staging, 0, chunk_bytes);
                 let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
                 gpu_results.extend_from_slice(bytemuck::cast_slice(&bytes));
 
@@ -539,8 +760,12 @@ pub mod gpu_ext {
                 offsets_b.push(chars_b.len() as u32);
             }
 
-            if chars_a.is_empty() { chars_a.push(0); }
-            if chars_b.is_empty() { chars_b.push(0); }
+            if chars_a.is_empty() {
+                chars_a.push(0);
+            }
+            if chars_b.is_empty() {
+                chars_b.push(0);
+            }
 
             let chars_a_bytes = (chars_a.len() * 4) as u64;
             let chars_b_bytes = (chars_b.len() * 4) as u64;
@@ -554,18 +779,76 @@ pub mod gpu_ext {
 
             let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
             let offsets_bytes = ((offsets_a.len() * 4) as u64).max(results_size);
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_A, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "wfoa");
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_B, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "wfob");
-            pool.ensure(&self.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "wfca");
-            pool.ensure(&self.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "wfcb");
-            pool.ensure(&self.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "wfres");
-            pool.ensure(&self.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "wfstg");
-            pool.ensure(&self.engine.device, SLOT_PARAMS, std::mem::size_of::<Params>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "wfprm");
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_A,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "wfoa",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_B,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "wfob",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_A,
+                chars_a_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "wfca",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_B,
+                chars_b_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "wfcb",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_RESULTS,
+                results_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                "wfres",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_STAGING,
+                results_size,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                "wfstg",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_PARAMS,
+                std::mem::size_of::<Params>() as u64,
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                "wfprm",
+            );
 
-            pool.write(&self.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&offsets_a));
-            pool.write(&self.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
-            pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&offsets_b));
-            pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_A,
+                bytemuck::cast_slice(&offsets_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_A,
+                bytemuck::cast_slice(&chars_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_B,
+                bytemuck::cast_slice(&offsets_b),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_B,
+                bytemuck::cast_slice(&chars_b),
+            );
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
             let buf_chars_a = pool.get(SLOT_CHARS_A);
@@ -593,31 +876,62 @@ pub mod gpu_ext {
                 };
                 pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
-                let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 4, resource: buf_results.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
-                    ],
-                });
+                let bg = self
+                    .engine
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &self.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buf_offsets_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: buf_chars_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: buf_offsets_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: buf_chars_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: buf_results.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: buf_params.as_entire_binding(),
+                            },
+                        ],
+                    });
 
-                let mut encoder = self.engine.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("wavefront enc") },
-                );
+                let mut encoder =
+                    self.engine
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("wavefront enc"),
+                        });
                 {
-                    let mut pass = encoder.begin_compute_pass(
-                        &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
-                    );
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: None,
+                        timestamp_writes: None,
+                    });
                     pass.set_pipeline(&self.wavefront_pipeline);
                     pass.set_bind_group(0, &bg, &[]);
                     pass.dispatch_workgroups(chunk, 1, 1);
                 }
-                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, results_size);
+                encoder.copy_buffer_to_buffer(
+                    buf_results,
+                    0,
+                    pool.get(SLOT_STAGING),
+                    0,
+                    results_size,
+                );
                 let bytes = self.engine.readback(encoder, &pool, results_size)?;
                 let flat: &[f32] = bytemuck::cast_slice(&bytes);
                 out.extend_from_slice(&flat[..chunk as usize]);
@@ -695,7 +1009,10 @@ pub mod gpu_ext {
             // would silently lose precision; route the whole batch to CPU.
             const F32_EXACT_MAX: i64 = 1 << 24;
             let max_score_magnitude = [
-                self.match_score, self.mismatch_score, self.gap_open, self.gap_extend,
+                self.match_score,
+                self.mismatch_score,
+                self.gap_open,
+                self.gap_extend,
             ]
             .iter()
             .map(|&v| v.unsigned_abs())
@@ -707,11 +1024,16 @@ pub mod gpu_ext {
                 for pairs in &self.ops {
                     let row = pairs
                         .par_iter()
-                        .map(|(a, b)| needleman_wunsch_affine(
-                            a, b,
-                            self.match_score, self.mismatch_score,
-                            self.gap_open, self.gap_extend,
-                        ))
+                        .map(|(a, b)| {
+                            needleman_wunsch_affine(
+                                a,
+                                b,
+                                self.match_score,
+                                self.mismatch_score,
+                                self.gap_open,
+                                self.gap_extend,
+                            )
+                        })
                         .collect();
                     out.push(row);
                 }
@@ -759,10 +1081,16 @@ pub mod gpu_ext {
             if !cpu_oversized.is_empty() {
                 let cpu_res: Vec<i64> = cpu_oversized
                     .par_iter()
-                    .map(|&(op, j)| needleman_wunsch_affine(
-                        self.ops[op][j].0, self.ops[op][j].1,
-                        self.match_score, self.mismatch_score, self.gap_open, self.gap_extend,
-                    ))
+                    .map(|&(op, j)| {
+                        needleman_wunsch_affine(
+                            self.ops[op][j].0,
+                            self.ops[op][j].1,
+                            self.match_score,
+                            self.mismatch_score,
+                            self.gap_open,
+                            self.gap_extend,
+                        )
+                    })
                     .collect();
                 for (k, &(op, j)) in cpu_oversized.iter().enumerate() {
                     out[op][j] = cpu_res[k];
@@ -781,10 +1109,16 @@ pub mod gpu_ext {
                 }
                 let cpu_res: Vec<i64> = gpu_op_pair
                     .par_iter()
-                    .map(|&(op, j)| needleman_wunsch_affine(
-                        self.ops[op][j].0, self.ops[op][j].1,
-                        self.match_score, self.mismatch_score, self.gap_open, self.gap_extend,
-                    ))
+                    .map(|&(op, j)| {
+                        needleman_wunsch_affine(
+                            self.ops[op][j].0,
+                            self.ops[op][j].1,
+                            self.match_score,
+                            self.mismatch_score,
+                            self.gap_open,
+                            self.gap_extend,
+                        )
+                    })
                     .collect();
                 for (idx, &(op, j)) in gpu_op_pair.iter().enumerate() {
                     out[op][j] = cpu_res[idx];
@@ -793,8 +1127,12 @@ pub mod gpu_ext {
             }
             crate::gpu::GpuEngine::record_routing(total_gpu, 0);
 
-            if chars_a.is_empty() { chars_a.push(0); }
-            if chars_b.is_empty() { chars_b.push(0); }
+            if chars_a.is_empty() {
+                chars_a.push(0);
+            }
+            if chars_b.is_empty() {
+                chars_b.push(0);
+            }
 
             let chars_a_bytes = (chars_a.len() * 4) as u64;
             let chars_b_bytes = (chars_b.len() * 4) as u64;
@@ -809,18 +1147,76 @@ pub mod gpu_ext {
             // Single submit: all chunks recorded into one encoder, read back once.
             let mut pool = self.kernel.pool.lock().unwrap_or_else(|e| e.into_inner());
             let offsets_bytes = ((offsets_a.len() * 4) as u64).max(results_size);
-            pool.ensure(&self.kernel.engine.device, SLOT_OFFSETS_A, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bnoa");
-            pool.ensure(&self.kernel.engine.device, SLOT_OFFSETS_B, offsets_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bnob");
-            pool.ensure(&self.kernel.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bnca");
-            pool.ensure(&self.kernel.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bncb");
-            pool.ensure(&self.kernel.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "bnres");
-            pool.ensure(&self.kernel.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "bnstg");
-            pool.ensure(&self.kernel.engine.device, SLOT_PARAMS, std::mem::size_of::<Params>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "bnp");
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_OFFSETS_A,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "bnoa",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_OFFSETS_B,
+                offsets_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "bnob",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_CHARS_A,
+                chars_a_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "bnca",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_CHARS_B,
+                chars_b_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "bncb",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_RESULTS,
+                results_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                "bnres",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_STAGING,
+                results_size,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                "bnstg",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_PARAMS,
+                std::mem::size_of::<Params>() as u64,
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                "bnp",
+            );
 
-            pool.write(&self.kernel.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&offsets_a));
-            pool.write(&self.kernel.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
-            pool.write(&self.kernel.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&offsets_b));
-            pool.write(&self.kernel.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+            pool.write(
+                &self.kernel.engine.queue,
+                SLOT_OFFSETS_A,
+                bytemuck::cast_slice(&offsets_a),
+            );
+            pool.write(
+                &self.kernel.engine.queue,
+                SLOT_CHARS_A,
+                bytemuck::cast_slice(&chars_a),
+            );
+            pool.write(
+                &self.kernel.engine.queue,
+                SLOT_OFFSETS_B,
+                bytemuck::cast_slice(&offsets_b),
+            );
+            pool.write(
+                &self.kernel.engine.queue,
+                SLOT_CHARS_B,
+                bytemuck::cast_slice(&chars_b),
+            );
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
             let buf_chars_a = pool.get(SLOT_CHARS_A);
@@ -846,42 +1242,76 @@ pub mod gpu_ext {
                     gap_extend: self.gap_extend as f32,
                     _pad: 0,
                 };
-                pool.write(&self.kernel.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
+                pool.write(
+                    &self.kernel.engine.queue,
+                    SLOT_PARAMS,
+                    bytemuck::bytes_of(&params),
+                );
 
-                let bg = self.kernel.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &self.kernel.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 4, resource: buf_results.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
-                    ],
-                });
+                let bg = self
+                    .kernel
+                    .engine
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &self.kernel.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buf_offsets_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: buf_chars_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: buf_offsets_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: buf_chars_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: buf_results.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: buf_params.as_entire_binding(),
+                            },
+                        ],
+                    });
 
                 let mut encoder = self.kernel.engine.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("needleman batch encoder") },
+                    &wgpu::CommandEncoderDescriptor {
+                        label: Some("needleman batch encoder"),
+                    },
                 );
-                let workgroups = (chunk + 15) / 16;
+                let workgroups = chunk.div_ceil(16);
                 {
-                    let mut pass = encoder.begin_compute_pass(
-                        &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
-                    );
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: None,
+                        timestamp_writes: None,
+                    });
                     pass.set_pipeline(&self.kernel.pipeline);
                     pass.set_bind_group(0, &bg, &[]);
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 4;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(
+                    buf_results,
+                    0,
+                    pool.get(SLOT_STAGING),
+                    0,
+                    chunk_bytes,
+                );
                 let bytes = self.kernel.engine.readback(encoder, &pool, chunk_bytes)?;
                 raw.extend_from_slice(bytemuck::cast_slice(&bytes));
 
                 remaining -= chunk;
                 offset += chunk;
             }
-
 
             // Split the flat result range back into per-op vectors (f32 -> i64).
             for (op, &(start, count)) in gpu_ranges.iter().enumerate() {
@@ -890,8 +1320,12 @@ pub mod gpu_ext {
                     let v = raw[(start as usize) + k];
                     if v < SENTINEL_THRESHOLD {
                         out[op][j] = needleman_wunsch_affine(
-                            self.ops[op][j].0, self.ops[op][j].1,
-                            self.match_score, self.mismatch_score, self.gap_open, self.gap_extend,
+                            self.ops[op][j].0,
+                            self.ops[op][j].1,
+                            self.match_score,
+                            self.mismatch_score,
+                            self.gap_open,
+                            self.gap_extend,
                         );
                     } else {
                         out[op][j] = v as i64;
@@ -920,6 +1354,41 @@ pub mod gpu_ext {
 mod tests {
     use super::*;
 
+    // ── Unit tests for the CPU paths ─────────────────────────────────────────
+
+    #[test]
+    fn test_linear_identical() {
+        assert_eq!(needleman_wunsch("ACGT", "ACGT", 2, -1, -2), 8);
+        assert_eq!(needleman_wunsch("", "", 2, -1, -2), 0);
+        assert_eq!(needleman_wunsch("a", "a", 1, -1, -2), 1);
+    }
+
+    #[test]
+    fn test_linear_symmetry() {
+        for (a, b) in &[("AGTACGCA", "TATGC"), ("hello", "world"), ("", "x")] {
+            let ab = needleman_wunsch(a, b, 2, -1, -2);
+            let ba = needleman_wunsch(b, a, 2, -1, -2);
+            assert_eq!(ab, ba, "NW linear must be symmetric for ({a:?}, {b:?})");
+        }
+    }
+
+    #[test]
+    fn test_linear_known_value() {
+        // Cross-checked against EMBOSS Needle (match=2, mismatch=-1, gap=-2).
+        assert_eq!(needleman_wunsch("AGTACGCA", "TATGC", 2, -1, -2), 1);
+    }
+
+    #[test]
+    fn test_linear_batch_matches_serial() {
+        let query = "AGTACGCA";
+        let cands = vec!["TATGC", "AGTACGCA", "", "AAAA", "TTTT"];
+        let batch = needleman_wunsch_batch(query, &cands, 2, -1, -2);
+        for (i, c) in cands.iter().enumerate() {
+            let expected = needleman_wunsch(query, c, 2, -1, -2);
+            assert_eq!(batch[i], expected, "batch[{i}] mismatch for {c:?}");
+        }
+    }
+
     #[test]
     fn test_affine_gap() {
         let s1 = "AGCT";
@@ -939,10 +1408,10 @@ mod tests {
 
     #[test]
     fn test_affine_empty_strings() {
-        // gap_open=-3, gap_extend=-1: gap of length k costs -3 + k*(-1)
+        // gap_open=-3, gap_extend=-1: gap of length k costs -3 + k*(-1) = -(3 + k)
         assert_eq!(needleman_wunsch_affine("", "", 2, -1, -3, -1), 0);
-        assert_eq!(needleman_wunsch_affine("abc", "", 2, -1, -3, -1), -3 + 3 * -1);
-        assert_eq!(needleman_wunsch_affine("", "abc", 2, -1, -3, -1), -3 + 3 * -1);
+        assert_eq!(needleman_wunsch_affine("abc", "", 2, -1, -3, -1), -6);
+        assert_eq!(needleman_wunsch_affine("", "abc", 2, -1, -3, -1), -6);
     }
 
     /// Confirm that large scoring parameters that would exceed f32 precision
@@ -954,7 +1423,10 @@ mod tests {
         // which is below 2^24, but match_score * 128 (GPU_MAX_STRING_LEN) =
         // 128_000_000 which is above 2^24.  The guard must route to CPU.
         let score = needleman_wunsch_affine("AGCT", "AGCT", 1_000_000, -1, -3, -1);
-        assert_eq!(score, 4_000_000, "large match_score must compute exactly on CPU");
+        assert_eq!(
+            score, 4_000_000,
+            "large match_score must compute exactly on CPU"
+        );
     }
 
     #[test]
@@ -963,6 +1435,51 @@ mod tests {
         let score_sub = needleman_wunsch_affine("café", "cafe", 2, -1, -3, -1);
         let score_same = needleman_wunsch_affine("café", "café", 2, -1, -3, -1);
         assert!(score_sub < score_same, "substitution must reduce score");
+    }
+
+    #[test]
+    fn test_affine_batch_matches_serial() {
+        let query = "AGTACGCA";
+        let cands = vec!["TATGC", "AGTACGCA", "", "AAAA", "TTTT"];
+        let batch = needleman_wunsch_affine_batch(query, &cands, 2, -1, -3, -1);
+        for (i, c) in cands.iter().enumerate() {
+            let expected = needleman_wunsch_affine(query, c, 2, -1, -3, -1);
+            assert_eq!(batch[i], expected, "affine batch[{i}] mismatch for {c:?}");
+        }
+    }
+
+    #[test]
+    fn test_affine_open_zero_degenerates_to_linear() {
+        // gap_open=0: affine cost = 0 + k*gap_extend = k*gap_extend = linear model.
+        for (a, b) in &[("AGCT", "AGCT"), ("AGCT", "TGCA"), ("hello", "world")] {
+            let linear = needleman_wunsch(a, b, 2, -1, -1);
+            let affine = needleman_wunsch_affine(a, b, 2, -1, 0, -1);
+            assert_eq!(
+                affine, linear,
+                "affine(open=0) must equal linear for ({a:?}, {b:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_affine_symmetry() {
+        for (a, b) in &[("AGTACGCA", "TATGC"), ("café", "cafe"), ("", "x")] {
+            let ab = needleman_wunsch_affine(a, b, 2, -1, -3, -1);
+            let ba = needleman_wunsch_affine(b, a, 2, -1, -3, -1);
+            assert_eq!(ab, ba, "NW affine must be symmetric for ({a:?}, {b:?})");
+        }
+    }
+
+    #[test]
+    fn test_sat_helpers_used_in_needleman() {
+        // Very long strings with high scores: must not overflow or panic in release.
+        let a = "A".repeat(1000);
+        let b = "A".repeat(1000);
+        let score = needleman_wunsch_affine(&a, &b, 1_000_000, -1, -3, -1);
+        assert_eq!(
+            score, 1_000_000_000,
+            "1000 matches × 1_000_000 = 1_000_000_000"
+        );
     }
 
     #[cfg(feature = "gpu")]
@@ -989,7 +1506,9 @@ mod tests {
         #[test]
         fn test_gpu_f32_precision_guard_routes_to_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
 
             // match_score = 200_000 * 128 = 25_600_000 > 2^24.
             let pairs = vec![("AGCT", "AGCT"), ("hello", "world")];
@@ -1000,14 +1519,19 @@ mod tests {
                 .iter()
                 .map(|(a, b)| needleman_wunsch_affine(a, b, 200_000, -1, -3, -1))
                 .collect();
-            assert_eq!(gpu_res, cpu_res, "large scoring params must be exact (CPU path)");
+            assert_eq!(
+                gpu_res, cpu_res,
+                "large scoring params must be exact (CPU path)"
+            );
         }
 
         /// Normal range scoring params should still match CPU exactly on GPU.
         #[test]
         fn test_gpu_normal_scoring_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             GpuEngine::set_gpu_threshold(Some(1));
 
             let mut state: u64 = 0xDEAD_CAFE;
@@ -1017,16 +1541,33 @@ mod tests {
                 state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
                 let lb = 1 + (state % 60) as usize;
                 state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-                let a: String = (0..la).map(|_| { state = state.wrapping_mul(6364136223846793005).wrapping_add(1); (b'a' + (state >> 33) as u8 % 26) as char }).collect();
-                let b: String = (0..lb).map(|_| { state = state.wrapping_mul(6364136223846793005).wrapping_add(1); (b'a' + (state >> 33) as u8 % 26) as char }).collect();
+                let a: String = (0..la)
+                    .map(|_| {
+                        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        (b'a' + (state >> 33) as u8 % 26) as char
+                    })
+                    .collect();
+                let b: String = (0..lb)
+                    .map(|_| {
+                        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        (b'a' + (state >> 33) as u8 % 26) as char
+                    })
+                    .collect();
                 pairs.push((a, b));
             }
-            let refs: Vec<(&str, &str)> = pairs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-            let gpu = kernel.compute_batch(&refs, 2, -1, -3, -1).expect("GPU NW batch");
-            let cpu: Vec<i64> = refs.iter().map(|(a, b)| needleman_wunsch_affine(a, b, 2, -1, -3, -1)).collect();
+            let refs: Vec<(&str, &str)> = pairs
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+                .collect();
+            let gpu = kernel
+                .compute_batch(&refs, 2, -1, -3, -1)
+                .expect("GPU NW batch");
+            let cpu: Vec<i64> = refs
+                .iter()
+                .map(|(a, b)| needleman_wunsch_affine(a, b, 2, -1, -3, -1))
+                .collect();
             assert_eq!(gpu, cpu, "GPU NW must match CPU for normal scoring range");
             GpuEngine::set_gpu_threshold(None);
         }
     }
 }
-

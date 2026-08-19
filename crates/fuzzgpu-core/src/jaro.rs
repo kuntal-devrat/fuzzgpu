@@ -1,3 +1,9 @@
+#![allow(
+    clippy::manual_clamp,
+    clippy::manual_div_ceil,
+    clippy::needless_range_loop
+)]
+
 use rayon::prelude::*;
 
 /// Jaro similarity between two strings.
@@ -16,9 +22,15 @@ pub fn jaro(a: &str, b: &str) -> f64 {
 
 fn jaro_bytes(a: &[u8], b: &[u8]) -> f64 {
     let (m, n) = (a.len(), b.len());
-    if m == 0 && n == 0 { return 1.0; }
-    if m == 0 || n == 0 { return 0.0; }
-    if a == b { return 1.0; }
+    if m == 0 && n == 0 {
+        return 1.0;
+    }
+    if m == 0 || n == 0 {
+        return 0.0;
+    }
+    if a == b {
+        return 1.0;
+    }
 
     let match_distance = (m.max(n) / 2).saturating_sub(1);
 
@@ -30,7 +42,13 @@ fn jaro_bytes(a: &[u8], b: &[u8]) -> f64 {
     if m <= 128 && n <= 128 {
         let mut a_matches = [false; 128];
         let mut b_matches = [false; 128];
-        jaro_inner_slice(a, b, &mut a_matches[..m], &mut b_matches[..n], match_distance)
+        jaro_inner_slice(
+            a,
+            b,
+            &mut a_matches[..m],
+            &mut b_matches[..n],
+            match_distance,
+        )
     } else {
         let mut a_matches = vec![false; m];
         let mut b_matches = vec![false; n];
@@ -40,16 +58,28 @@ fn jaro_bytes(a: &[u8], b: &[u8]) -> f64 {
 
 fn jaro_chars(a: &[char], b: &[char]) -> f64 {
     let (m, n) = (a.len(), b.len());
-    if m == 0 && n == 0 { return 1.0; }
-    if m == 0 || n == 0 { return 0.0; }
-    if a == b { return 1.0; }
+    if m == 0 && n == 0 {
+        return 1.0;
+    }
+    if m == 0 || n == 0 {
+        return 0.0;
+    }
+    if a == b {
+        return 1.0;
+    }
 
     let match_distance = (m.max(n) / 2).saturating_sub(1);
 
     if m <= 128 && n <= 128 {
         let mut a_matches = [false; 128];
         let mut b_matches = [false; 128];
-        jaro_inner_slice(a, b, &mut a_matches[..m], &mut b_matches[..n], match_distance)
+        jaro_inner_slice(
+            a,
+            b,
+            &mut a_matches[..m],
+            &mut b_matches[..n],
+            match_distance,
+        )
     } else {
         let mut a_matches = vec![false; m];
         let mut b_matches = vec![false; n];
@@ -58,7 +88,13 @@ fn jaro_chars(a: &[char], b: &[char]) -> f64 {
 }
 
 #[inline]
-fn jaro_inner_slice<T: PartialEq>(a: &[T], b: &[T], a_matches: &mut [bool], b_matches: &mut [bool], match_distance: usize) -> f64 {
+fn jaro_inner_slice<T: PartialEq>(
+    a: &[T],
+    b: &[T],
+    a_matches: &mut [bool],
+    b_matches: &mut [bool],
+    match_distance: usize,
+) -> f64 {
     let (m, n) = (a.len(), b.len());
     let mut matches = 0u32;
 
@@ -67,7 +103,9 @@ fn jaro_inner_slice<T: PartialEq>(a: &[T], b: &[T], a_matches: &mut [bool], b_ma
         let hi = (i + match_distance + 1).min(n);
         let ai = &a[i];
         for j in lo..hi {
-            if b_matches[j] || ai != &b[j] { continue; }
+            if b_matches[j] || ai != &b[j] {
+                continue;
+            }
             a_matches[i] = true;
             b_matches[j] = true;
             matches += 1;
@@ -75,27 +113,38 @@ fn jaro_inner_slice<T: PartialEq>(a: &[T], b: &[T], a_matches: &mut [bool], b_ma
         }
     }
 
-    if matches == 0 { return 0.0; }
+    if matches == 0 {
+        return 0.0;
+    }
 
     let mut transpositions = 0u32;
     let mut k = 0;
     for i in 0..m {
-        if !a_matches[i] { continue; }
-        while !b_matches[k] { k += 1; }
-        if a[i] != b[k] { transpositions += 1; }
+        if !a_matches[i] {
+            continue;
+        }
+        while !b_matches[k] {
+            k += 1;
+        }
+        if a[i] != b[k] {
+            transpositions += 1;
+        }
         k += 1;
     }
 
     (matches as f64 / m as f64
         + matches as f64 / n as f64
-        + (matches as f64 - (transpositions / 2) as f64) / matches as f64) / 3.0
+        + (matches as f64 - (transpositions / 2) as f64) / matches as f64)
+        / 3.0
 }
 
 /// Jaro-Winkler similarity with prefix bonus.
 /// `p` is the prefix weight (0.0–0.25, default 0.1).
 /// Winkler prefix boost is applied when base Jaro similarity is >= 0.7 (Winkler 1990 standard).
 pub fn jaro_winkler(a: &str, b: &str, p: f64) -> f64 {
-    if a == b { return 1.0; }
+    if a == b {
+        return 1.0;
+    }
 
     let jaro_score = jaro(a, b);
     if jaro_score < 0.7 {
@@ -176,36 +225,43 @@ pub fn jaro_winkler_batch(query: &str, candidates: &[&str], p: f64) -> Vec<f64> 
     let gate = !query.is_empty()
         && query.is_ascii()
         && query.len() <= 64
-        && candidates.iter().all(|c| !c.is_empty() && c.is_ascii() && c.len() <= 64);
+        && candidates
+            .iter()
+            .all(|c| !c.is_empty() && c.is_ascii() && c.len() <= 64);
     if gate {
         let qb = query.as_bytes();
         let w = crate::simd::jaro_simd_width();
         let mut out = vec![0.0; candidates.len()];
         const CHUNK: usize = 4096;
-        out.par_chunks_mut(CHUNK).enumerate().for_each(|(ci, chunk_out)| {
-            let start = ci * CHUNK;
-            let mut k = 0;
-            // Stack-allocated buffer avoids a heap Vec per SIMD group.
-            let mut group_buf: [&[u8]; 8] = [b""; 8];
-            while k + w <= chunk_out.len() {
-                for t in 0..w {
-                    group_buf[t] = candidates[start + k + t].as_bytes();
+        out.par_chunks_mut(CHUNK)
+            .enumerate()
+            .for_each(|(ci, chunk_out)| {
+                let start = ci * CHUNK;
+                let mut k = 0;
+                // Stack-allocated buffer avoids a heap Vec per SIMD group.
+                let mut group_buf: [&[u8]; 8] = [b""; 8];
+                while k + w <= chunk_out.len() {
+                    for t in 0..w {
+                        group_buf[t] = candidates[start + k + t].as_bytes();
+                    }
+                    let res = crate::simd::jaro_width(qb, &group_buf[..w]);
+                    for (lane, score) in res.into_iter().enumerate() {
+                        let cand = candidates[start + k + lane];
+                        chunk_out[k + lane] = jaro_winkler_apply_boost(query, cand, score, p);
+                    }
+                    k += w;
                 }
-                let res = crate::simd::jaro_width(qb, &group_buf[..w]);
-                for (lane, score) in res.into_iter().enumerate() {
-                    let cand = candidates[start + k + lane];
-                    chunk_out[k + lane] = jaro_winkler_apply_boost(query, cand, score, p);
+                while k < chunk_out.len() {
+                    chunk_out[k] = jaro_winkler(query, candidates[start + k], p);
+                    k += 1;
                 }
-                k += w;
-            }
-            while k < chunk_out.len() {
-                chunk_out[k] = jaro_winkler(query, candidates[start + k], p);
-                k += 1;
-            }
-        });
+            });
         return out;
     }
-    candidates.par_iter().map(|c| jaro_winkler(query, c, p)).collect()
+    candidates
+        .par_iter()
+        .map(|c| jaro_winkler(query, c, p))
+        .collect()
 }
 
 /// Jaro + Winkler prefix boost, sharing the prefix computation with
@@ -226,9 +282,10 @@ pub fn jaro_winkler_cdist_cpu(list_a: &[&str], list_b: &[&str], p: f64) -> Vec<V
     if list_a.is_empty() || list_b.is_empty() {
         return vec![];
     }
-    list_a.par_iter().map(|a| {
-        list_b.iter().map(|b| jaro_winkler(a, b, p)).collect()
-    }).collect()
+    list_a
+        .par_iter()
+        .map(|a| list_b.iter().map(|b| jaro_winkler(a, b, p)).collect())
+        .collect()
 }
 
 /// Optimized Jaro variant using the bit-parallel fast path for ≤ 64-byte
@@ -240,12 +297,12 @@ pub fn jaro_optimized(a: &[u8], b: &[u8]) -> f64 {
 #[cfg(feature = "gpu")]
 pub mod gpu_ext {
     use super::*;
-    use bytemuck::{Pod, Zeroable};
-    use std::sync::OnceLock;
     use crate::gpu::{
         BufferPool, FuzzGpuError, GpuEngine, Result, SLOT_CHARS_A, SLOT_CHARS_B, SLOT_OFFSETS_A,
         SLOT_OFFSETS_B, SLOT_PARAMS, SLOT_RESULTS, SLOT_STAGING,
     };
+    use bytemuck::{Pod, Zeroable};
+    use std::sync::OnceLock;
 
     const SHADER_SRC: &str = include_str!("shaders/jaro.wgsl");
     const MATRIX_SHADER_SRC: &str = include_str!("shaders/jaro_matrix.wgsl");
@@ -336,7 +393,10 @@ pub mod gpu_ext {
             let cands: Vec<&str> = indices.iter().map(|&i| pairs[i].1).collect();
             return crate::jaro_winkler_batch(query, &cands, p);
         }
-        indices.par_iter().map(|&i| crate::jaro_winkler(pairs[i].0, pairs[i].1, p)).collect()
+        indices
+            .par_iter()
+            .map(|&i| crate::jaro_winkler(pairs[i].0, pairs[i].1, p))
+            .collect()
     }
 
     pub struct GpuJaroKernel {
@@ -353,13 +413,15 @@ pub mod gpu_ext {
 
     impl GpuJaroKernel {
         pub fn get() -> Result<&'static Self> {
-            if let Some(k) = GLOBAL_GPU_JARO_KERNEL.get() { return Ok(k); }
+            if let Some(k) = GLOBAL_GPU_JARO_KERNEL.get() {
+                return Ok(k);
+            }
             let engine = GpuEngine::get()?;
             let kernel = Self::new_inner(engine)?;
             let _ = GLOBAL_GPU_JARO_KERNEL.set(kernel);
-            GLOBAL_GPU_JARO_KERNEL.get().ok_or_else(|| FuzzGpuError::NoDevice(
-                "Jaro kernel unexpectedly absent after init".into()
-            ))
+            GLOBAL_GPU_JARO_KERNEL.get().ok_or_else(|| {
+                FuzzGpuError::NoDevice("Jaro kernel unexpectedly absent after init".into())
+            })
         }
 
         fn new_inner(engine: std::sync::Arc<GpuEngine>) -> Result<Self> {
@@ -368,25 +430,84 @@ pub mod gpu_ext {
             // validation failures surface as `FuzzGpuError::ShaderError` instead
             // of panicking. Test builds can fault-inject invalid WGSL via
             // `effective_shader_source`.
-            let bind_group_layout = engine.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("jaro bgl"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                    wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                ],
-            });
+            let bind_group_layout =
+                engine
+                    .device
+                    .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("jaro bgl"),
+                        entries: &[
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 0,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 1,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 2,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 3,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 4,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 5,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                        ],
+                    });
 
-            let layout = engine.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                // wgpu 30 wraps bind group layouts in `Option` and replaces
-                // `push_constant_ranges` with `immediate_size` (0 = none).
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
-            });
+            let layout = engine
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    // wgpu 30 wraps bind group layouts in `Option` and replaces
+                    // `push_constant_ranges` with `immediate_size` (0 = none).
+                    bind_group_layouts: &[Some(&bind_group_layout)],
+                    immediate_size: 0,
+                });
 
             let pipeline = engine.build_compute_pipeline(
                 "jaro pipeline",
@@ -399,7 +520,13 @@ pub mod gpu_ext {
                 &layout,
             )?;
 
-            Ok(Self { engine, pipeline, matrix_pipeline, bind_group_layout, pool: std::sync::Mutex::new(BufferPool::new()) })
+            Ok(Self {
+                engine,
+                pipeline,
+                matrix_pipeline,
+                bind_group_layout,
+                pool: std::sync::Mutex::new(BufferPool::new()),
+            })
         }
 
         /// Smart streaming GPU/CPU dispatch for batch Jaro-Winkler with dynamic chunk sizing.
@@ -417,7 +544,9 @@ pub mod gpu_ext {
                 )));
             }
             let n = pairs.len();
-            if n == 0 { return Ok(vec![]); }
+            if n == 0 {
+                return Ok(vec![]);
+            }
 
             let mut results = vec![0.0f64; n];
             let mut gpu_indices: Vec<usize> = Vec::with_capacity(n);
@@ -480,7 +609,12 @@ pub mod gpu_ext {
             Ok(results)
         }
 
-        fn compute_gpu_subset(&self, pairs: &[(&str, &str)], indices: &[usize], p: f64) -> Result<Vec<f64>> {
+        fn compute_gpu_subset(
+            &self,
+            pairs: &[(&str, &str)],
+            indices: &[usize],
+            p: f64,
+        ) -> Result<Vec<f64>> {
             let batch_size = indices.len() as u32;
 
             // Transposed, pair-major packing: chars_x[i * B + t] is the i-th
@@ -531,18 +665,76 @@ pub mod gpu_ext {
             // the Levenshtein kernel: ensure capacity, upload once, reuse.
             let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
             let lens_bytes = ((lens_a.len() * 4) as u64).max(results_size);
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_A, lens_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "joa");
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_B, lens_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "job");
-            pool.ensure(&self.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "jca");
-            pool.ensure(&self.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "jcb");
-            pool.ensure(&self.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "jres");
-            pool.ensure(&self.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "jstg");
-            pool.ensure(&self.engine.device, SLOT_PARAMS, std::mem::size_of::<JaroParams>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "jp");
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_A,
+                lens_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "joa",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_B,
+                lens_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "job",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_A,
+                chars_a_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "jca",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_B,
+                chars_b_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "jcb",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_RESULTS,
+                results_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                "jres",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_STAGING,
+                results_size,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                "jstg",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_PARAMS,
+                std::mem::size_of::<JaroParams>() as u64,
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                "jp",
+            );
 
-            pool.write(&self.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&lens_a));
-            pool.write(&self.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
-            pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&lens_b));
-            pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_A,
+                bytemuck::cast_slice(&lens_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_A,
+                bytemuck::cast_slice(&chars_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_B,
+                bytemuck::cast_slice(&lens_b),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_B,
+                bytemuck::cast_slice(&chars_b),
+            );
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
             let buf_chars_a = pool.get(SLOT_CHARS_A);
@@ -561,26 +753,65 @@ pub mod gpu_ext {
 
             while remaining > 0 {
                 let chunk = remaining.min(MAX_DISPATCH);
-                let params = JaroParams { batch_size, max_len, offset };
+                let params = JaroParams {
+                    batch_size,
+                    max_len,
+                    offset,
+                };
                 pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
-                let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None, layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 4, resource: buf_results.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
-                    ],
-                });
+                let bg = self
+                    .engine
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &self.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buf_offsets_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: buf_chars_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: buf_offsets_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: buf_chars_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: buf_results.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: buf_params.as_entire_binding(),
+                            },
+                        ],
+                    });
 
-                let mut encoder = self.engine.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("jaro encoder") });
-                let workgroups = (chunk + 63) / 64;
-                { let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None }); pass.set_pipeline(&self.pipeline); pass.set_bind_group(0, &bg, &[]); pass.dispatch_workgroups(workgroups, 1, 1); }
+                let mut encoder =
+                    self.engine
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("jaro encoder"),
+                        });
+                let workgroups = chunk.div_ceil(64);
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: None,
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &bg, &[]);
+                    pass.dispatch_workgroups(workgroups, 1, 1);
+                }
                 let chunk_bytes = (chunk as u64) * 16;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, &buf_staging, 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(buf_results, 0, buf_staging, 0, chunk_bytes);
                 let bytes = self.engine.readback(encoder, &pool, chunk_bytes)?;
                 let raw: &[u32] = bytemuck::cast_slice(&bytes);
                 // Decode 4×u32 per pair and assemble the f64 score host-side
@@ -608,7 +839,12 @@ pub mod gpu_ext {
         /// `p` (Winkler prefix weight) must be in `0.0..=0.25`; anything else —
         /// including NaN — is rejected with `FuzzGpuError::InvalidInput` before
         /// any dispatch.
-        pub fn compute_matrix(&self, list_a: &[&str], list_b: &[&str], p: f64) -> Result<Vec<Vec<f64>>> {
+        pub fn compute_matrix(
+            &self,
+            list_a: &[&str],
+            list_b: &[&str],
+            p: f64,
+        ) -> Result<Vec<Vec<f64>>> {
             // Serialize GPU dispatch across threads (gfx-rs/wgpu#10085).
             let _dispatch = self.engine.dispatch_lock();
             if !(0.0..=0.25).contains(&p) {
@@ -618,7 +854,9 @@ pub mod gpu_ext {
             }
             let rows = list_a.len();
             let cols = list_b.len();
-            if rows == 0 || cols == 0 { return Ok(vec![]); }
+            if rows == 0 || cols == 0 {
+                return Ok(vec![]);
+            }
 
             let total_pairs = rows * cols;
             if total_pairs < self.engine.metric_gpu_threshold(JARO_DISCRETE_FACTOR) {
@@ -628,8 +866,12 @@ pub mod gpu_ext {
             crate::gpu::GpuEngine::record_routing(total_pairs, 0);
 
             // CRITICAL FIX: Pre-filter oversized strings BEFORE GPU buffer allocation or dispatch
-            let has_oversized = list_a.iter().any(|s| s.chars().count() > GPU_MAX_STRING_LEN)
-                || list_b.iter().any(|s| s.chars().count() > GPU_MAX_STRING_LEN);
+            let has_oversized = list_a
+                .iter()
+                .any(|s| s.chars().count() > GPU_MAX_STRING_LEN)
+                || list_b
+                    .iter()
+                    .any(|s| s.chars().count() > GPU_MAX_STRING_LEN);
 
             let matrix_size = (total_pairs as u64) * 16;
 
@@ -673,20 +915,81 @@ pub mod gpu_ext {
             // path; matrix/staging slots grow to the larger matrix size.
             let mut pool = self.pool.lock().unwrap_or_else(|e| e.into_inner());
             let lens_bytes = ((lens_a.len() * 4) as u64).max(matrix_size);
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_A, lens_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "jmoa");
-            pool.ensure(&self.engine.device, SLOT_OFFSETS_B, lens_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "jmob");
-            pool.ensure(&self.engine.device, SLOT_CHARS_A, (chars_a.len() * 4) as u64, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "jmca");
-            pool.ensure(&self.engine.device, SLOT_CHARS_B, (chars_b.len() * 4) as u64, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "jmcb");
-            pool.ensure(&self.engine.device, SLOT_RESULTS, matrix_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "jmres");
-            pool.ensure(&self.engine.device, SLOT_STAGING, matrix_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "jmstg");
-            pool.ensure(&self.engine.device, SLOT_PARAMS, std::mem::size_of::<JaroMatrixParams>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "jmp");
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_A,
+                lens_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "jmoa",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_OFFSETS_B,
+                lens_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "jmob",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_A,
+                (chars_a.len() * 4) as u64,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "jmca",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_CHARS_B,
+                (chars_b.len() * 4) as u64,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "jmcb",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_RESULTS,
+                matrix_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                "jmres",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_STAGING,
+                matrix_size,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                "jmstg",
+            );
+            pool.ensure(
+                &self.engine.device,
+                SLOT_PARAMS,
+                std::mem::size_of::<JaroMatrixParams>() as u64,
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                "jmp",
+            );
 
-            pool.write(&self.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&lens_a));
-            pool.write(&self.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
-            pool.write(&self.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&lens_b));
-            pool.write(&self.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_A,
+                bytemuck::cast_slice(&lens_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_A,
+                bytemuck::cast_slice(&chars_a),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_OFFSETS_B,
+                bytemuck::cast_slice(&lens_b),
+            );
+            pool.write(
+                &self.engine.queue,
+                SLOT_CHARS_B,
+                bytemuck::cast_slice(&chars_b),
+            );
 
-            let params = JaroMatrixParams { rows: rows as u32, cols: cols as u32 };
+            let params = JaroMatrixParams {
+                rows: rows as u32,
+                cols: cols as u32,
+            };
             pool.write(&self.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
@@ -697,50 +1000,65 @@ pub mod gpu_ext {
             let buf_staging = pool.get(SLOT_STAGING);
             let buf_params = pool.get(SLOT_PARAMS);
 
-            let bg = self.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None, layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 4, resource: buf_matrix.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
-                ],
-            });
+            let bg = self
+                .engine
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buf_offsets_a.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: buf_chars_a.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: buf_offsets_b.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: buf_chars_b.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: buf_matrix.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: buf_params.as_entire_binding(),
+                        },
+                    ],
+                });
 
-            let mut encoder = self.engine.device.create_command_encoder(
-                &wgpu::CommandEncoderDescriptor { label: Some("jaro matrix encoder") },
-            );
+            let mut encoder =
+                self.engine
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("jaro matrix encoder"),
+                    });
 
-            let workgroups_x = (cols as u32 + 15) / 16;
-            let workgroups_y = (rows as u32 + 15) / 16;
+            let workgroups_x = (cols as u32).div_ceil(16);
+            let workgroups_y = (rows as u32).div_ceil(16);
 
             {
-                let mut pass = encoder.begin_compute_pass(
-                    &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
-                );
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: None,
+                    timestamp_writes: None,
+                });
                 pass.set_pipeline(&self.matrix_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
             }
 
-            encoder.copy_buffer_to_buffer(&buf_matrix, 0, &buf_staging, 0, matrix_size);
-            self.engine.submit(encoder);
-
-            let slice = buf_staging.slice(..);
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.engine.map_readback(&slice, move |r| { let _ = tx.send(r); });
-            self.engine.poll();
-
-            rx.recv_timeout(GpuEngine::readback_timeout())
-                .map_err(|_| FuzzGpuError::Timeout("GPU Jaro matrix readback timed out after 10s".into()))?
-                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {}", e)))?;
-
-            let data = slice
-                .get_mapped_range()
-                .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map range failed: {e}")))?;
-            let raw: &[u32] = bytemuck::cast_slice(&data);
+            encoder.copy_buffer_to_buffer(buf_matrix, 0, buf_staging, 0, matrix_size);
+            // Use the shared readback helper — submits, polls, maps, copies, unmaps in
+            // one step so an error return never leaves the staging buffer permanently mapped.
+            let bytes = self.engine.readback(encoder, &pool, matrix_size)?;
+            let raw: &[u32] = bytemuck::cast_slice(&bytes);
 
             // Decode 4×u32 per cell and assemble the f64 score host-side
             // (bit-exact with the CPU reference). GPU_RECOMPUTE cells — empty
@@ -761,9 +1079,6 @@ pub mod gpu_ext {
                 }
                 matrix.push(row_vec);
             }
-
-            drop(data);
-            buf_staging.unmap();
             Ok(matrix)
         }
 
@@ -778,7 +1093,11 @@ pub mod gpu_ext {
                     "Jaro-Winkler prefix weight p must be within 0.0..=0.25, got {p}"
                 )));
             }
-            Ok(GpuJaroBatch { kernel: self, p, ops: Vec::new() })
+            Ok(GpuJaroBatch {
+                kernel: self,
+                p,
+                ops: Vec::new(),
+            })
         }
     }
 
@@ -866,7 +1185,9 @@ pub mod gpu_ext {
             if !cpu_pairs.is_empty() {
                 let cpu_res: Vec<f64> = cpu_pairs
                     .par_iter()
-                    .map(|&(op, j)| crate::jaro_winkler(self.ops[op][j].0, self.ops[op][j].1, self.p))
+                    .map(|&(op, j)| {
+                        crate::jaro_winkler(self.ops[op][j].0, self.ops[op][j].1, self.p)
+                    })
                     .collect();
                 for (k, &(op, j)) in cpu_pairs.iter().enumerate() {
                     out[op][j] = cpu_res[k];
@@ -875,7 +1196,12 @@ pub mod gpu_ext {
 
             // Below the (auto or user-set) GPU threshold the whole batch is
             // cheaper on CPU.
-            if total_gpu < self.kernel.engine.metric_gpu_threshold(JARO_DISCRETE_FACTOR) {
+            if total_gpu
+                < self
+                    .kernel
+                    .engine
+                    .metric_gpu_threshold(JARO_DISCRETE_FACTOR)
+            {
                 crate::gpu::GpuEngine::record_routing(0, total_gpu);
                 let mut gpu_op_pair: Vec<(usize, usize)> = Vec::with_capacity(total_gpu);
                 for (op, &(_, count)) in gpu_ranges.iter().enumerate() {
@@ -885,7 +1211,9 @@ pub mod gpu_ext {
                 }
                 let cpu_res: Vec<f64> = gpu_op_pair
                     .par_iter()
-                    .map(|&(op, j)| crate::jaro_winkler(self.ops[op][j].0, self.ops[op][j].1, self.p))
+                    .map(|&(op, j)| {
+                        crate::jaro_winkler(self.ops[op][j].0, self.ops[op][j].1, self.p)
+                    })
                     .collect();
                 for (idx, &(op, j)) in gpu_op_pair.iter().enumerate() {
                     out[op][j] = cpu_res[idx];
@@ -923,18 +1251,76 @@ pub mod gpu_ext {
             // Single submit: all chunks recorded into one encoder, read back once.
             let mut pool = self.kernel.pool.lock().unwrap_or_else(|e| e.into_inner());
             let lens_bytes = ((lens_a.len() * 4) as u64).max(results_size);
-            pool.ensure(&self.kernel.engine.device, SLOT_OFFSETS_A, lens_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bjoa");
-            pool.ensure(&self.kernel.engine.device, SLOT_OFFSETS_B, lens_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bjob");
-            pool.ensure(&self.kernel.engine.device, SLOT_CHARS_A, chars_a_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bjca");
-            pool.ensure(&self.kernel.engine.device, SLOT_CHARS_B, chars_b_bytes, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, "bjcb");
-            pool.ensure(&self.kernel.engine.device, SLOT_RESULTS, results_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, "bjres");
-            pool.ensure(&self.kernel.engine.device, SLOT_STAGING, results_size, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, "bjstg");
-            pool.ensure(&self.kernel.engine.device, SLOT_PARAMS, std::mem::size_of::<JaroParams>() as u64, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, "bjp");
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_OFFSETS_A,
+                lens_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "bjoa",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_OFFSETS_B,
+                lens_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "bjob",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_CHARS_A,
+                chars_a_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "bjca",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_CHARS_B,
+                chars_b_bytes,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                "bjcb",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_RESULTS,
+                results_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                "bjres",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_STAGING,
+                results_size,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                "bjstg",
+            );
+            pool.ensure(
+                &self.kernel.engine.device,
+                SLOT_PARAMS,
+                std::mem::size_of::<JaroParams>() as u64,
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                "bjp",
+            );
 
-            pool.write(&self.kernel.engine.queue, SLOT_OFFSETS_A, bytemuck::cast_slice(&lens_a));
-            pool.write(&self.kernel.engine.queue, SLOT_CHARS_A, bytemuck::cast_slice(&chars_a));
-            pool.write(&self.kernel.engine.queue, SLOT_OFFSETS_B, bytemuck::cast_slice(&lens_b));
-            pool.write(&self.kernel.engine.queue, SLOT_CHARS_B, bytemuck::cast_slice(&chars_b));
+            pool.write(
+                &self.kernel.engine.queue,
+                SLOT_OFFSETS_A,
+                bytemuck::cast_slice(&lens_a),
+            );
+            pool.write(
+                &self.kernel.engine.queue,
+                SLOT_CHARS_A,
+                bytemuck::cast_slice(&chars_a),
+            );
+            pool.write(
+                &self.kernel.engine.queue,
+                SLOT_OFFSETS_B,
+                bytemuck::cast_slice(&lens_b),
+            );
+            pool.write(
+                &self.kernel.engine.queue,
+                SLOT_CHARS_B,
+                bytemuck::cast_slice(&chars_b),
+            );
 
             let buf_offsets_a = pool.get(SLOT_OFFSETS_A);
             let buf_chars_a = pool.get(SLOT_CHARS_A);
@@ -950,36 +1336,75 @@ pub mod gpu_ext {
             let mut offset = 0u32;
             while remaining > 0 {
                 let chunk = remaining.min(MAX_DISPATCH);
-                let params = JaroParams { batch_size: total_gpu as u32, max_len, offset };
-                pool.write(&self.kernel.engine.queue, SLOT_PARAMS, bytemuck::bytes_of(&params));
+                let params = JaroParams {
+                    batch_size: total_gpu as u32,
+                    max_len,
+                    offset,
+                };
+                pool.write(
+                    &self.kernel.engine.queue,
+                    SLOT_PARAMS,
+                    bytemuck::bytes_of(&params),
+                );
 
-                let bg = self.kernel.engine.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &self.kernel.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: buf_offsets_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: buf_chars_a.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: buf_offsets_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 3, resource: buf_chars_b.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 4, resource: buf_results.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 5, resource: buf_params.as_entire_binding() },
-                    ],
-                });
+                let bg = self
+                    .kernel
+                    .engine
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &self.kernel.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buf_offsets_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: buf_chars_a.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: buf_offsets_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: buf_chars_b.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: buf_results.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: buf_params.as_entire_binding(),
+                            },
+                        ],
+                    });
 
                 let mut encoder = self.kernel.engine.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("jaro batch encoder") },
+                    &wgpu::CommandEncoderDescriptor {
+                        label: Some("jaro batch encoder"),
+                    },
                 );
-                let workgroups = (chunk + 63) / 64;
+                let workgroups = chunk.div_ceil(64);
                 {
-                    let mut pass = encoder.begin_compute_pass(
-                        &wgpu::ComputePassDescriptor { label: None, timestamp_writes: None },
-                    );
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: None,
+                        timestamp_writes: None,
+                    });
                     pass.set_pipeline(&self.kernel.pipeline);
                     pass.set_bind_group(0, &bg, &[]);
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
                 let chunk_bytes = (chunk as u64) * 16;
-                encoder.copy_buffer_to_buffer(&buf_results, 0, pool.get(SLOT_STAGING), 0, chunk_bytes);
+                encoder.copy_buffer_to_buffer(
+                    buf_results,
+                    0,
+                    pool.get(SLOT_STAGING),
+                    0,
+                    chunk_bytes,
+                );
                 let bytes = self.kernel.engine.readback(encoder, &pool, chunk_bytes)?;
                 raw.extend_from_slice(bytemuck::cast_slice(&bytes));
 
@@ -995,7 +1420,8 @@ pub mod gpu_ext {
                     let j = op_gpu_to_pair[op][k];
                     let part = &raw[(start as usize + k) * 4..(start as usize + k) * 4 + 4];
                     if part[0] == GPU_RECOMPUTE {
-                        out[op][j] = crate::jaro_winkler(self.ops[op][j].0, self.ops[op][j].1, self.p);
+                        out[op][j] =
+                            crate::jaro_winkler(self.ops[op][j].0, self.ops[op][j].1, self.p);
                     } else {
                         out[op][j] = jaro_winkler_from_parts(
                             part[0],
@@ -1021,11 +1447,15 @@ pub mod gpu_ext {
             let mut state = seed;
             let mut out = Vec::with_capacity(count);
             for _ in 0..count {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 let len = 1 + ((state >> 33) as usize % 16);
                 let mut s = String::with_capacity(len);
                 for _ in 0..len {
-                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
                 }
                 out.push(s);
@@ -1052,7 +1482,9 @@ pub mod gpu_ext {
                 assert!(
                     (g - c).abs() < 1e-4,
                     "GPU Jaro result {} differs from CPU: {} vs {}",
-                    i, g, c
+                    i,
+                    g,
+                    c
                 );
             }
         }
@@ -1070,31 +1502,44 @@ pub mod gpu_ext {
         #[test]
         fn test_gpu_batch_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a = gen_strings(1000, 0xFEEDFACE);
             let b = gen_strings(1000, 0x0DDBA11);
-            let mut pairs: Vec<(&str, &str)> =
-                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+            let mut pairs: Vec<(&str, &str)> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x.as_str(), y.as_str()))
+                .collect();
             pairs[0] = ("", "");
             pairs[1] = ("", "xyz");
             pairs[2] = ("hello", "hello");
 
-            let gpu = kernel.compute_batch(&pairs, 0.1).expect("GPU batch should succeed");
-            let cpu: Vec<f64> = pairs.iter()
+            let gpu = kernel
+                .compute_batch(&pairs, 0.1)
+                .expect("GPU batch should succeed");
+            let cpu: Vec<f64> = pairs
+                .iter()
                 .map(|(x, y)| crate::jaro_winkler(x, y, 0.1))
                 .collect();
             assert_close(&gpu, &cpu);
             // The negative sentinel (written for > 128-char strings) must never leak.
-            assert!(gpu.iter().all(|&v| v >= 0.0), "negative sentinel leaked into results");
+            assert!(
+                gpu.iter().all(|&v| v >= 0.0),
+                "negative sentinel leaked into results"
+            );
         }
 
         /// Validates the 2D Jaro-Winkler matrix pipeline.
         #[test]
         fn test_gpu_matrix_matches_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a = gen_strings(30, 0x13579BDF);
@@ -1102,7 +1547,9 @@ pub mod gpu_ext {
             let refs_a: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
             let refs_b: Vec<&str> = b.iter().map(|s| s.as_str()).collect();
 
-            let gpu = kernel.compute_matrix(&refs_a, &refs_b, 0.1).expect("GPU matrix should succeed");
+            let gpu = kernel
+                .compute_matrix(&refs_a, &refs_b, 0.1)
+                .expect("GPU matrix should succeed");
             let cpu = jaro_winkler_cdist_cpu(&refs_a, &refs_b, 0.1);
             for (grow, crow) in gpu.iter().zip(cpu.iter()) {
                 assert_close(grow, crow);
@@ -1114,13 +1561,18 @@ pub mod gpu_ext {
         #[test]
         fn test_batch_readback_timeout_returns_timeout_error() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a = gen_strings(1000, 0xFEED1234);
             let b = gen_strings(1000, 0x0DD5A11);
-            let pairs: Vec<(&str, &str)> =
-                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+            let pairs: Vec<(&str, &str)> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x.as_str(), y.as_str()))
+                .collect();
 
             crate::gpu::arm_readback_timeout_fault();
             let result = kernel.compute_batch(&pairs, 0.1);
@@ -1137,7 +1589,9 @@ pub mod gpu_ext {
         #[test]
         fn test_matrix_readback_timeout_returns_timeout_error() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a = gen_strings(30, 0x33333333);
@@ -1161,13 +1615,18 @@ pub mod gpu_ext {
         #[test]
         fn test_buffer_size_validation_returns_buffer_error() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a = gen_strings(1000, 0xC0FFEE01);
             let b = gen_strings(1000, 0x0FF1CE11);
-            let pairs: Vec<(&str, &str)> =
-                a.iter().zip(b.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+            let pairs: Vec<(&str, &str)> = a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x.as_str(), y.as_str()))
+                .collect();
 
             crate::gpu::arm_small_buffer_fault();
             let result = kernel.compute_batch(&pairs, 0.1);
@@ -1185,7 +1644,9 @@ pub mod gpu_ext {
         #[test]
         fn test_matrix_oversize_falls_back_to_cpu() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a = gen_strings(32, 0xA11CEB00);
@@ -1239,18 +1700,25 @@ pub mod gpu_ext {
         #[test]
         fn test_jaro_batch_invalid_p_returns_invalid_input() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let pairs: Vec<(&str, &str)> = vec![("MARTHA", "MARHTA"), ("hello", "world")];
             for bad in [0.26f64, -0.1, 0.5, f64::NAN] {
                 match kernel.compute_batch(&pairs, bad) {
                     Err(FuzzGpuError::InvalidInput(_)) => {} // expected
-                    other => panic!("expected FuzzGpuError::InvalidInput for p={bad}, got: {other:?}"),
+                    other => {
+                        panic!("expected FuzzGpuError::InvalidInput for p={bad}, got: {other:?}")
+                    }
                 }
             }
             for good in [0.0f64, 0.1, 0.25] {
-                assert!(kernel.compute_batch(&pairs, good).is_ok(), "p={good} should be accepted");
+                assert!(
+                    kernel.compute_batch(&pairs, good).is_ok(),
+                    "p={good} should be accepted"
+                );
             }
         }
 
@@ -1258,7 +1726,9 @@ pub mod gpu_ext {
         #[test]
         fn test_jaro_matrix_invalid_p_returns_invalid_input() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let list_a = ["MARTHA", "hello"];
@@ -1266,11 +1736,16 @@ pub mod gpu_ext {
             for bad in [0.26f64, -0.1, 0.5, f64::NAN] {
                 match kernel.compute_matrix(&list_a, &list_b, bad) {
                     Err(FuzzGpuError::InvalidInput(_)) => {} // expected
-                    other => panic!("expected FuzzGpuError::InvalidInput for p={bad}, got: {other:?}"),
+                    other => {
+                        panic!("expected FuzzGpuError::InvalidInput for p={bad}, got: {other:?}")
+                    }
                 }
             }
             for good in [0.0f64, 0.1, 0.25] {
-                assert!(kernel.compute_matrix(&list_a, &list_b, good).is_ok(), "p={good} should be accepted");
+                assert!(
+                    kernel.compute_matrix(&list_a, &list_b, good).is_ok(),
+                    "p={good} should be accepted"
+                );
             }
         }
 
@@ -1279,23 +1754,25 @@ pub mod gpu_ext {
         #[test]
         fn test_gpu_batch_matches_compute_batch() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let a1 = gen_strings(600, 0x1A2B3C4D);
             let b1 = gen_strings(600, 0x5E6F7081);
-            let mut op1: Vec<(&str, &str)> =
-                a1.iter().zip(b1.iter()).map(|(x, y)| (x.as_str(), y.as_str())).collect();
+            let mut op1: Vec<(&str, &str)> = a1
+                .iter()
+                .zip(b1.iter())
+                .map(|(x, y)| (x.as_str(), y.as_str()))
+                .collect();
             op1[0] = ("", "");
             op1[1] = ("", "xyz");
             op1[2] = ("MARTHA", "MARHTA");
 
             let long = "a".repeat(300);
-            let op2: Vec<(&str, &str)> = vec![
-                ("日本", "日本語"),
-                (&long, "short"),
-                ("dwayne", "duane"),
-            ];
+            let op2: Vec<(&str, &str)> =
+                vec![("日本", "日本語"), (&long, "short"), ("dwayne", "duane")];
 
             let p = 0.1;
             let expected = vec![
@@ -1312,9 +1789,15 @@ pub mod gpu_ext {
             for (i, (g, e)) in got.iter().zip(&expected).enumerate() {
                 assert_eq!(g.len(), e.len(), "op {i} length");
                 for (j, (&gv, &ev)) in g.iter().zip(e).enumerate() {
-                    assert!((gv - ev).abs() < 1e-4, "op {i} pair {j}: batch {gv} != compute {ev}");
+                    assert!(
+                        (gv - ev).abs() < 1e-4,
+                        "op {i} pair {j}: batch {gv} != compute {ev}"
+                    );
                 }
-                assert!(!g.iter().any(|&v| v < 0.0), "op {i}: negative sentinel leaked");
+                assert!(
+                    !g.iter().any(|&v| v < 0.0),
+                    "op {i}: negative sentinel leaked"
+                );
             }
         }
 
@@ -1323,14 +1806,18 @@ pub mod gpu_ext {
         #[test]
         fn test_gpu_batch_invalid_p_returns_invalid_input() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             for bad in [0.26f64, -0.1, 0.5, f64::NAN] {
                 match kernel.batch(bad) {
                     Err(FuzzGpuError::InvalidInput(_)) => {} // expected
                     Err(e) => panic!("expected FuzzGpuError::InvalidInput for p={bad}, got: {e}"),
-                    Ok(_) => panic!("expected FuzzGpuError::InvalidInput for p={bad}, got Ok batch"),
+                    Ok(_) => {
+                        panic!("expected FuzzGpuError::InvalidInput for p={bad}, got Ok batch")
+                    }
                 }
             }
             assert!(kernel.batch(0.1).is_ok(), "p=0.1 should be accepted");
@@ -1340,7 +1827,9 @@ pub mod gpu_ext {
         #[test]
         fn test_gpu_batch_empty_returns_empty() {
             let _gpu_guard = crate::gpu::gpu_test_lock();
-            let Some(kernel) = gpu_kernel_or_skip() else { return; };
+            let Some(kernel) = gpu_kernel_or_skip() else {
+                return;
+            };
             let _force = force_gpu();
 
             let batch = kernel.batch(0.1).expect("batch creation");
@@ -1377,5 +1866,199 @@ mod tests {
                 by, ch, a, b
             );
         }
+    }
+
+    // ── Unit tests ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_jaro_known_values() {
+        // Cross-checked against rapidfuzz.
+        let j = jaro("MARTHA", "MARHTA");
+        assert!((j - 0.9444444).abs() < 1e-6, "MARTHA/MARHTA jaro = {j}");
+        assert_eq!(jaro("hello", "hello"), 1.0);
+        assert_eq!(jaro("", ""), 1.0);
+        assert_eq!(jaro("hello", ""), 0.0);
+        assert_eq!(jaro("", "world"), 0.0);
+    }
+
+    #[test]
+    fn test_jaro_symmetry() {
+        let pairs = [("MARTHA", "MARHTA"), ("abc", "xyz"), ("a", ""), ("", "b")];
+        for (a, b) in &pairs {
+            let ab = jaro(a, b);
+            let ba = jaro(b, a);
+            assert!(
+                (ab - ba).abs() < 1e-12,
+                "jaro not symmetric for ({a:?},{b:?}): {ab} vs {ba}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_jaro_range() {
+        let pairs = [
+            ("MARTHA", "MARHTA"),
+            ("abc", "xyz"),
+            ("a", ""),
+            ("hello", "hello"),
+        ];
+        for (a, b) in &pairs {
+            let j = jaro(a, b);
+            assert!(
+                (0.0..=1.0).contains(&j),
+                "jaro({a:?},{b:?}) = {j} out of [0,1]"
+            );
+        }
+    }
+
+    #[test]
+    fn test_jaro_winkler_known_values() {
+        // JW with p=0.1, verified against rapidfuzz.
+        let jw = jaro_winkler("MARTHA", "MARHTA", 0.1);
+        assert!((jw - 0.9611111).abs() < 1e-6, "MARTHA/MARHTA JW = {jw}");
+        assert_eq!(jaro_winkler("hello", "hello", 0.1), 1.0);
+    }
+
+    #[test]
+    fn test_jaro_winkler_p0_equals_jaro() {
+        let pairs = [("MARTHA", "MARHTA"), ("abc", "abcd"), ("", ""), ("x", "y")];
+        for (a, b) in &pairs {
+            let j = jaro(a, b);
+            let jw = jaro_winkler(a, b, 0.0);
+            assert!(
+                (jw - j).abs() < 1e-12,
+                "jaro_winkler(p=0) {jw} != jaro {j} for ({a:?},{b:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_jaro_winkler_prefix_boost() {
+        // Shared prefix "MAR" boosts above raw Jaro when base >= 0.7.
+        let j = jaro("MARTHA", "MARHTA");
+        let jw = jaro_winkler("MARTHA", "MARHTA", 0.1);
+        assert!(jw >= j, "Winkler boost must not decrease score");
+    }
+
+    #[test]
+    fn test_jaro_winkler_p_clamped_to_0_25() {
+        // p > 0.25 is clamped to 0.25 silently (no panic).
+        let jw25 = jaro_winkler("MARTHA", "MARHTA", 0.25);
+        let jw30 = jaro_winkler("MARTHA", "MARHTA", 0.30);
+        assert!((jw25 - jw30).abs() < 1e-12, "p > 0.25 must clamp to 0.25");
+    }
+
+    #[test]
+    fn test_jaro_winkler_batch_matches_serial() {
+        let query = "MARTHA";
+        let cands = vec!["MARHTA", "MATRH", "MARTHA", "", "xyz", "MARTHA123"];
+        let batch = jaro_winkler_batch(query, &cands, 0.1);
+        assert_eq!(batch.len(), cands.len());
+        for (i, c) in cands.iter().enumerate() {
+            let expected = jaro_winkler(query, c, 0.1);
+            assert!(
+                (batch[i] - expected).abs() < 1e-12,
+                "jaro_winkler_batch[{i}] ({c:?}) = {} != {expected}",
+                batch[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_jaro_winkler_batch_large() {
+        // 2000 items triggers the SIMD-chunked Rayon path.
+        let query = "benchmark";
+        let cands: Vec<String> = (0..2000).map(|i| format!("bench_{}", i % 30)).collect();
+        let refs: Vec<&str> = cands.iter().map(|s| s.as_str()).collect();
+        let batch = jaro_winkler_batch(query, &refs, 0.1);
+        assert_eq!(batch.len(), 2000);
+        assert!(batch.iter().all(|&r| (0.0..=1.0).contains(&r)));
+    }
+
+    #[test]
+    fn test_jaro_winkler_cdist_cpu_matches_per_pair() {
+        let list_a = vec!["MARTHA", "DWAYNE", "abc"];
+        let list_b = vec!["MARHTA", "DUANE", "xyz", ""];
+        let matrix = jaro_winkler_cdist_cpu(&list_a, &list_b, 0.1);
+        assert_eq!(matrix.len(), 3);
+        assert_eq!(matrix[0].len(), 4);
+        for (i, a) in list_a.iter().enumerate() {
+            for (j, b) in list_b.iter().enumerate() {
+                let expected = jaro_winkler(a, b, 0.1);
+                assert!(
+                    (matrix[i][j] - expected).abs() < 1e-12,
+                    "cdist_cpu[{i}][{j}] mismatch: {} vs {expected}",
+                    matrix[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_jaro_winkler_cdist_cpu_empty() {
+        let empty: &[&str] = &[];
+        assert_eq!(
+            jaro_winkler_cdist_cpu(empty, empty, 0.1),
+            Vec::<Vec<f64>>::new()
+        );
+        assert_eq!(
+            jaro_winkler_cdist_cpu(&["a"], empty, 0.1),
+            Vec::<Vec<f64>>::new()
+        );
+        assert_eq!(
+            jaro_winkler_cdist_cpu(empty, &["b"], 0.1),
+            Vec::<Vec<f64>>::new()
+        );
+    }
+
+    #[test]
+    fn test_jaro_bitpar_matches_reference() {
+        // jaro_bitpar is the ≤64-byte fast path; must match the full reference.
+        let pairs = [
+            ("MARTHA", "MARHTA"),
+            ("DWAYNE", "DUANE"),
+            ("dixon", "dicksonx"),
+            ("", ""),
+            ("a", "b"),
+            ("abc", "abc"),
+        ];
+        for (a, b) in &pairs {
+            if a.len() <= 64 && b.len() <= 64 {
+                let bp = crate::simd::jaro_bitpar(a.as_bytes(), b.as_bytes());
+                let ref_ = jaro(a, b);
+                assert!(
+                    (bp - ref_).abs() < 1e-12,
+                    "jaro_bitpar {bp} != jaro {ref_} for ({a:?},{b:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_jaro_optimized_matches_jaro() {
+        let pairs = [
+            ("MARTHA", "MARHTA"),
+            (
+                "hello world this is longer than 64 bytes to exercise the heap path yes",
+                "hello world this is slightly different to exercise the heap path yes",
+            ),
+            ("", "abc"),
+        ];
+        for (a, b) in &pairs {
+            let opt = jaro_optimized(a.as_bytes(), b.as_bytes());
+            let ref_ = jaro(a, b);
+            assert!(
+                (opt - ref_).abs() < 1e-12,
+                "jaro_optimized {opt} != jaro {ref_} for ({a:?},{b:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_jaro_unicode() {
+        // Unicode inputs use the char path.
+        let j = jaro("café", "cafe");
+        assert!((0.0..=1.0).contains(&j));
+        assert_eq!(jaro("日本語", "日本語"), 1.0);
     }
 }

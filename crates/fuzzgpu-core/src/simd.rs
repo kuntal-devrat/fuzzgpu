@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use crate::{sat_add, sat_mul};
 
 /// True Myers 1999 bit-vector Levenshtein distance.
@@ -22,8 +24,12 @@ pub fn levenshtein_myers(a: &[u8], b: &[u8]) -> u32 {
         return crate::levenshtein::levenshtein_distance_raw(&a, &b);
     }
     let (m, n) = (a.len(), b.len());
-    if m == 0 { return n as u32; }
-    if n == 0 { return m as u32; }
+    if m == 0 {
+        return n as u32;
+    }
+    if n == 0 {
+        return m as u32;
+    }
 
     // Ensure `a` is the shorter string (pattern) for the bitmask.
     // Myers algorithm is O(n × ⌈m/64⌉), so shorter pattern = faster.
@@ -46,8 +52,8 @@ pub fn levenshtein_myers(a: &[u8], b: &[u8]) -> u32 {
     // Pv = all 1s in the pattern-length mask (positive vertical delta = +1 everywhere)
     // Mv = all 0s (negative vertical delta = 0 everywhere)
     let mask = if m == 64 { u64::MAX } else { (1u64 << m) - 1 };
-    let mut pv: u64 = mask;  // positive vertical
-    let mut mv: u64 = 0u64;  // negative vertical
+    let mut pv: u64 = mask; // positive vertical
+    let mut mv: u64 = 0u64; // negative vertical
     let mut score = m as u32;
 
     // Process each character of text `b` with zero inner loop.
@@ -113,7 +119,8 @@ impl MyersPattern {
         assert!(
             !pattern.is_empty() && pattern.len() <= 64 && pattern.is_ascii(),
             "MyersPattern: pattern must be non-empty ASCII ≤ 64 bytes (got {} bytes, ascii={})",
-            pattern.len(), pattern.is_ascii()
+            pattern.len(),
+            pattern.is_ascii()
         );
         let mut peq = [0u64; 256];
         for (j, &ch) in pattern.iter().enumerate() {
@@ -121,7 +128,12 @@ impl MyersPattern {
         }
         let m = pattern.len();
         let mask = if m == 64 { u64::MAX } else { (1u64 << m) - 1 };
-        MyersPattern { peq, m, mask, last_bit: 1u64 << (m - 1) }
+        MyersPattern {
+            peq,
+            m,
+            mask,
+            last_bit: 1u64 << (m - 1),
+        }
     }
 }
 
@@ -217,9 +229,12 @@ pub(crate) fn myers_simd_width() -> usize {
 /// at most 8 entries (chunked by [`myers_simd_width`]).
 pub(crate) fn levenshtein_myers_width(pat: &MyersPattern, texts: &[&[u8]]) -> Vec<u32> {
     match texts.len() {
-        8 => levenshtein_myers_8way(pat, [
-            texts[0], texts[1], texts[2], texts[3], texts[4], texts[5], texts[6], texts[7],
-        ])
+        8 => levenshtein_myers_8way(
+            pat,
+            [
+                texts[0], texts[1], texts[2], texts[3], texts[4], texts[5], texts[6], texts[7],
+            ],
+        )
         .to_vec(),
         4 => levenshtein_myers_4way_pat(pat, [texts[0], texts[1], texts[2], texts[3]]).to_vec(),
         2 => {
@@ -237,7 +252,10 @@ pub(crate) fn levenshtein_myers_width(pat: &MyersPattern, texts: &[&[u8]]) -> Ve
             }
         }
         1 => vec![levenshtein_myers_pattern(pat, texts[0])],
-        _ => texts.iter().map(|t| levenshtein_myers_pattern(pat, t)).collect(),
+        _ => texts
+            .iter()
+            .map(|t| levenshtein_myers_pattern(pat, t))
+            .collect(),
     }
 }
 
@@ -264,7 +282,12 @@ pub(crate) fn levenshtein_myers_8way(pat: &MyersPattern, texts: [&[u8]; 8]) -> [
 #[target_feature(enable = "avx512f")]
 unsafe fn levenshtein_myers_8way_avx512(pat: &MyersPattern, texts: [&[u8]; 8]) -> [u32; 8] {
     use std::arch::x86_64::*;
-    let MyersPattern { peq, m, mask, last_bit } = pat;
+    let MyersPattern {
+        peq,
+        m,
+        mask,
+        last_bit,
+    } = pat;
     let zero = _mm512_setzero_si512();
     let one = _mm512_set1_epi64(1);
     let ones = _mm512_set1_epi64(-1);
@@ -272,8 +295,14 @@ unsafe fn levenshtein_myers_8way_avx512(pat: &MyersPattern, texts: [&[u8]; 8]) -
     let last_bcast = _mm512_set1_epi64(*last_bit as i64);
 
     let lens = [
-        texts[0].len(), texts[1].len(), texts[2].len(), texts[3].len(),
-        texts[4].len(), texts[5].len(), texts[6].len(), texts[7].len(),
+        texts[0].len(),
+        texts[1].len(),
+        texts[2].len(),
+        texts[3].len(),
+        texts[4].len(),
+        texts[5].len(),
+        texts[6].len(),
+        texts[7].len(),
     ];
     let min_len = lens.iter().copied().min().unwrap_or(0);
     let max_len = lens.iter().copied().max().unwrap_or(0);
@@ -310,7 +339,10 @@ unsafe fn levenshtein_myers_8way_avx512(pat: &MyersPattern, texts: [&[u8]; 8]) -
         let ph_shifted = _mm512_or_si512(_mm512_slli_epi64(ph, 1), one);
         let mh_shifted = _mm512_slli_epi64(mh, 1);
         pv = _mm512_and_si512(
-            _mm512_or_si512(mh_shifted, _mm512_andnot_si512(_mm512_or_si512(xv, ph_shifted), ones)),
+            _mm512_or_si512(
+                mh_shifted,
+                _mm512_andnot_si512(_mm512_or_si512(xv, ph_shifted), ones),
+            ),
             mask_bcast,
         );
         mv = _mm512_and_si512(_mm512_and_si512(ph_shifted, xv), mask_bcast);
@@ -361,7 +393,10 @@ unsafe fn levenshtein_myers_8way_avx512(pat: &MyersPattern, texts: [&[u8]; 8]) -
             let ph_shifted = _mm512_or_si512(_mm512_slli_epi64(ph, 1), one);
             let mh_shifted = _mm512_slli_epi64(mh, 1);
             pv = _mm512_and_si512(
-                _mm512_or_si512(mh_shifted, _mm512_andnot_si512(_mm512_or_si512(xv, ph_shifted), ones)),
+                _mm512_or_si512(
+                    mh_shifted,
+                    _mm512_andnot_si512(_mm512_or_si512(xv, ph_shifted), ones),
+                ),
                 mask_bcast,
             );
             mv = _mm512_and_si512(_mm512_and_si512(ph_shifted, xv), mask_bcast);
@@ -380,9 +415,17 @@ unsafe fn levenshtein_myers_8way_avx512(pat: &MyersPattern, texts: [&[u8]; 8]) -
 /// feature gate is needed beyond the architecture.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn levenshtein_myers_2way_neon(pat: &MyersPattern, texts: [&[u8]; 2]) -> [u32; 2] {
+pub(crate) unsafe fn levenshtein_myers_2way_neon(
+    pat: &MyersPattern,
+    texts: [&[u8]; 2],
+) -> [u32; 2] {
     use std::arch::aarch64::*;
-    let MyersPattern { peq, m, mask, last_bit } = pat;
+    let MyersPattern {
+        peq,
+        m,
+        mask,
+        last_bit,
+    } = pat;
     let mask_v = vdupq_n_u64(*mask);
     let last_v = vdupq_n_u64(*last_bit);
     let one = vdupq_n_u64(1);
@@ -392,7 +435,11 @@ pub(crate) unsafe fn levenshtein_myers_2way_neon(pat: &MyersPattern, texts: [&[u
     let mut pv = mask_v;
     let mut mv = zero;
     let mut score = vdupq_n_u64(*m as u64);
-    let mut remaining = vsetq_lane_u64(texts[1].len() as u64, vsetq_lane_u64(texts[0].len() as u64, zero, 0), 1);
+    let mut remaining = vsetq_lane_u64(
+        texts[1].len() as u64,
+        vsetq_lane_u64(texts[0].len() as u64, zero, 0),
+        1,
+    );
     let max_len = texts[0].len().max(texts[1].len());
 
     for j in 0..max_len {
@@ -402,8 +449,16 @@ pub(crate) unsafe fn levenshtein_myers_2way_neon(pat: &MyersPattern, texts: [&[u
 
         let r0 = vgetq_lane_u64(remaining, 0);
         let r1 = vgetq_lane_u64(remaining, 1);
-        let eq0 = if r0 > 0 { peq[*texts[0].get(j).unwrap_or(&0) as usize] } else { 0 };
-        let eq1 = if r1 > 0 { peq[*texts[1].get(j).unwrap_or(&0) as usize] } else { 0 };
+        let eq0 = if r0 > 0 {
+            peq[*texts[0].get(j).unwrap_or(&0) as usize]
+        } else {
+            0
+        };
+        let eq1 = if r1 > 0 {
+            peq[*texts[1].get(j).unwrap_or(&0) as usize]
+        } else {
+            0
+        };
         let eq = vandq_u64(vsetq_lane_u64(eq1, vsetq_lane_u64(eq0, zero, 0), 1), active);
 
         let xv = vorrq_u64(eq, mv);
@@ -421,7 +476,10 @@ pub(crate) unsafe fn levenshtein_myers_2way_neon(pat: &MyersPattern, texts: [&[u
 
         let ph_shifted = vorrq_u64(vshlq_n_u64(ph, 1), one);
         let mh_shifted = vshlq_n_u64(mh, 1);
-        pv = vandq_u64(vorrq_u64(mh_shifted, veorq_u64(vorrq_u64(xv, ph_shifted), ones)), mask_v);
+        pv = vandq_u64(
+            vorrq_u64(mh_shifted, veorq_u64(vorrq_u64(xv, ph_shifted), ones)),
+            mask_v,
+        );
         mv = vandq_u64(vandq_u64(ph_shifted, xv), mask_v);
 
         remaining = vqsubq_u64(remaining, one); // saturating: stays 0 once empty
@@ -433,8 +491,10 @@ pub(crate) unsafe fn levenshtein_myers_2way_neon(pat: &MyersPattern, texts: [&[u
 
 /// 4-way kernel over a prebuilt pattern (see [`MyersPattern`]).
 pub(crate) fn levenshtein_myers_4way_pat(pat: &MyersPattern, texts: [&[u8]; 4]) -> [u32; 4] {
-    debug_assert!(texts.iter().all(|t| t.is_ascii()),
-        "levenshtein_myers_4way_pat: all text inputs must be ASCII");
+    debug_assert!(
+        texts.iter().all(|t| t.is_ascii()),
+        "levenshtein_myers_4way_pat: all text inputs must be ASCII"
+    );
     #[cfg(target_arch = "x86_64")]
     {
         if avx2_available() {
@@ -447,9 +507,16 @@ pub(crate) fn levenshtein_myers_4way_pat(pat: &MyersPattern, texts: [&[u8]; 4]) 
 
 /// Scalar Myers over a prebuilt pattern (tail/fallback path of the batch).
 pub(crate) fn levenshtein_myers_pattern(pat: &MyersPattern, text: &[u8]) -> u32 {
-    debug_assert!(text.is_ascii(),
-        "levenshtein_myers_pattern: text must be ASCII");
-    let MyersPattern { peq, m, mask, last_bit } = pat;
+    debug_assert!(
+        text.is_ascii(),
+        "levenshtein_myers_pattern: text must be ASCII"
+    );
+    let MyersPattern {
+        peq,
+        m,
+        mask,
+        last_bit,
+    } = pat;
     let mut pv: u64 = *mask;
     let mut mv: u64 = 0;
     let mut score = *m as u32;
@@ -477,7 +544,12 @@ pub(crate) fn levenshtein_myers_pattern(pat: &MyersPattern, text: &[u8]) -> u32 
 /// Portable fallback for [`levenshtein_myers_4way`] (and the reference used to
 /// validate the AVX2 path). Same recurrence, `[u64; 4]` lanes.
 fn levenshtein_myers_4way_portable(pat: &MyersPattern, texts: [&[u8]; 4]) -> [u32; 4] {
-    let MyersPattern { peq, m, mask, last_bit } = pat;
+    let MyersPattern {
+        peq,
+        m,
+        mask,
+        last_bit,
+    } = pat;
     let mut pv = [*mask; 4];
     let mut mv = [0u64; 4];
     let mut score = [*m as u32; 4];
@@ -492,7 +564,11 @@ fn levenshtein_myers_4way_portable(pat: &MyersPattern, texts: [&[u8]; 4]) -> [u3
     for j in 0..max_len {
         for i in 0..4 {
             let active = if remaining[i] > 0 { u64::MAX } else { 0 };
-            let eq = if remaining[i] > 0 { peq[texts[i][j] as usize] } else { 0 };
+            let eq = if remaining[i] > 0 {
+                peq[texts[i][j] as usize]
+            } else {
+                0
+            };
             let xv = eq | mv[i];
             let eq_and_pv = eq & pv[i];
             let xh = (eq_and_pv.wrapping_add(pv[i]) ^ pv[i]) | eq;
@@ -524,14 +600,24 @@ fn levenshtein_myers_4way_portable(pat: &MyersPattern, texts: [&[u8]; 4]) -> [u3
 #[target_feature(enable = "avx2")]
 unsafe fn levenshtein_myers_4way_avx2(pat: &MyersPattern, texts: [&[u8]; 4]) -> [u32; 4] {
     use std::arch::x86_64::*;
-    let MyersPattern { peq, m, mask, last_bit } = pat;
+    let MyersPattern {
+        peq,
+        m,
+        mask,
+        last_bit,
+    } = pat;
     let zero = _mm256_setzero_si256();
     let ones = _mm256_set1_epi64x(-1);
     let one = _mm256_set1_epi64x(1);
     let mask_bcast = _mm256_set1_epi64x(*mask as i64);
     let last_bcast = _mm256_set1_epi64x(*last_bit as i64);
 
-    let lens = [texts[0].len(), texts[1].len(), texts[2].len(), texts[3].len()];
+    let lens = [
+        texts[0].len(),
+        texts[1].len(),
+        texts[2].len(),
+        texts[3].len(),
+    ];
     let min_len = lens.iter().copied().min().unwrap_or(0);
     let max_len = lens.iter().copied().max().unwrap_or(0);
 
@@ -558,15 +644,24 @@ unsafe fn levenshtein_myers_4way_avx2(pat: &MyersPattern, texts: [&[u8]; 4]) -> 
         let ph = _mm256_or_si256(mv, _mm256_andnot_si256(_mm256_or_si256(xh, pv), ones));
         let mh = _mm256_and_si256(pv, xh);
 
-        let hit_bool = _mm256_andnot_si256(_mm256_cmpeq_epi64(_mm256_and_si256(ph, last_bcast), zero), one);
+        let hit_bool = _mm256_andnot_si256(
+            _mm256_cmpeq_epi64(_mm256_and_si256(ph, last_bcast), zero),
+            one,
+        );
         score = _mm256_add_epi64(score, hit_bool);
-        let miss_bool = _mm256_andnot_si256(_mm256_cmpeq_epi64(_mm256_and_si256(mh, last_bcast), zero), one);
+        let miss_bool = _mm256_andnot_si256(
+            _mm256_cmpeq_epi64(_mm256_and_si256(mh, last_bcast), zero),
+            one,
+        );
         score = _mm256_sub_epi64(score, miss_bool);
 
         let ph_shifted = _mm256_or_si256(_mm256_slli_epi64(ph, 1), one);
         let mh_shifted = _mm256_slli_epi64(mh, 1);
         pv = _mm256_and_si256(
-            _mm256_or_si256(mh_shifted, _mm256_andnot_si256(_mm256_or_si256(xv, ph_shifted), ones)),
+            _mm256_or_si256(
+                mh_shifted,
+                _mm256_andnot_si256(_mm256_or_si256(xv, ph_shifted), ones),
+            ),
             mask_bcast,
         );
         mv = _mm256_and_si256(_mm256_and_si256(ph_shifted, xv), mask_bcast);
@@ -585,12 +680,15 @@ unsafe fn levenshtein_myers_4way_avx2(pat: &MyersPattern, texts: [&[u8]; 4]) -> 
         for j in min_len..max_len {
             let is_zero = _mm256_cmpeq_epi64(remaining, zero);
             let active = _mm256_andnot_si256(is_zero, ones);
-            let eq = _mm256_and_si256(_mm256_set_epi64x(
-                peq[*texts[3].get(j).unwrap_or(&0) as usize] as i64,
-                peq[*texts[2].get(j).unwrap_or(&0) as usize] as i64,
-                peq[*texts[1].get(j).unwrap_or(&0) as usize] as i64,
-                peq[*texts[0].get(j).unwrap_or(&0) as usize] as i64,
-            ), active);
+            let eq = _mm256_and_si256(
+                _mm256_set_epi64x(
+                    peq[*texts[3].get(j).unwrap_or(&0) as usize] as i64,
+                    peq[*texts[2].get(j).unwrap_or(&0) as usize] as i64,
+                    peq[*texts[1].get(j).unwrap_or(&0) as usize] as i64,
+                    peq[*texts[0].get(j).unwrap_or(&0) as usize] as i64,
+                ),
+                active,
+            );
 
             let xv = _mm256_or_si256(eq, mv);
             let eq_and_pv = _mm256_and_si256(eq, pv);
@@ -608,7 +706,10 @@ unsafe fn levenshtein_myers_4way_avx2(pat: &MyersPattern, texts: [&[u8]; 4]) -> 
             let ph_shifted = _mm256_or_si256(_mm256_slli_epi64(ph, 1), one);
             let mh_shifted = _mm256_slli_epi64(mh, 1);
             pv = _mm256_and_si256(
-                _mm256_or_si256(mh_shifted, _mm256_andnot_si256(_mm256_or_si256(xv, ph_shifted), ones)),
+                _mm256_or_si256(
+                    mh_shifted,
+                    _mm256_andnot_si256(_mm256_or_si256(xv, ph_shifted), ones),
+                ),
                 mask_bcast,
             );
             mv = _mm256_and_si256(_mm256_and_si256(ph_shifted, xv), mask_bcast);
@@ -618,7 +719,12 @@ unsafe fn levenshtein_myers_4way_avx2(pat: &MyersPattern, texts: [&[u8]; 4]) -> 
     }
 
     let lanes: [i64; 4] = std::mem::transmute(score);
-    [lanes[0] as u32, lanes[1] as u32, lanes[2] as u32, lanes[3] as u32]
+    [
+        lanes[0] as u32,
+        lanes[1] as u32,
+        lanes[2] as u32,
+        lanes[3] as u32,
+    ]
 }
 
 /// Bit-parallel Jaro similarity (the foundation for the 4-way kernel).
@@ -664,7 +770,11 @@ pub fn jaro_bitpar(a: &[u8], b: &[u8]) -> f64 {
         // Window bits [lo, hi] ∩ [0, n): lo ≤ 63 always; hi ≤ n-1 ≤ 63, so
         // hi+1 ≤ 64 — guard the == 64 case.
         let lo_mask = (1u64 << lo) - 1;
-        let hi_mask = if hi == 63 { u64::MAX } else { (1u64 << (hi + 1)) - 1 };
+        let hi_mask = if hi == 63 {
+            u64::MAX
+        } else {
+            (1u64 << (hi + 1)) - 1
+        };
         let window = n_mask & !lo_mask & hi_mask;
 
         let cand = pos_b[a[i] as usize] & window & !matched_b;
@@ -715,7 +825,8 @@ pub fn jaro_4way(a: &[u8], texts: [&[u8]; 4]) -> [f64; 4] {
     assert!(
         a.len() <= 64 && a.is_ascii(),
         "jaro_4way: first argument must be ASCII ≤ 64 bytes (got {} bytes, ascii={})",
-        a.len(), a.is_ascii()
+        a.len(),
+        a.is_ascii()
     );
     debug_assert!(texts.iter().all(|t| t.len() <= 64 && t.is_ascii()));
     #[cfg(target_arch = "x86_64")]
@@ -758,9 +869,12 @@ pub(crate) fn jaro_simd_width() -> usize {
 /// Jaro over 1..=8 texts at the caller's chosen width (see [`jaro_simd_width`]).
 pub(crate) fn jaro_width(a: &[u8], texts: &[&[u8]]) -> Vec<f64> {
     match texts.len() {
-        8 => jaro_8way(a, [
-            texts[0], texts[1], texts[2], texts[3], texts[4], texts[5], texts[6], texts[7],
-        ])
+        8 => jaro_8way(
+            a,
+            [
+                texts[0], texts[1], texts[2], texts[3], texts[4], texts[5], texts[6], texts[7],
+            ],
+        )
         .to_vec(),
         4 => jaro_4way(a, [texts[0], texts[1], texts[2], texts[3]]).to_vec(),
         2 => {
@@ -803,8 +917,14 @@ unsafe fn jaro_8way_avx512(a: &[u8], texts: [&[u8]; 8]) -> [f64; 8] {
     use std::arch::x86_64::*;
     let m = a.len();
     let lens = [
-        texts[0].len(), texts[1].len(), texts[2].len(), texts[3].len(),
-        texts[4].len(), texts[5].len(), texts[6].len(), texts[7].len(),
+        texts[0].len(),
+        texts[1].len(),
+        texts[2].len(),
+        texts[3].len(),
+        texts[4].len(),
+        texts[5].len(),
+        texts[6].len(),
+        texts[7].len(),
     ];
 
     let mut pos = [[0u64; 256]; 8];
@@ -819,13 +939,35 @@ unsafe fn jaro_8way_avx512(a: &[u8], texts: [&[u8]; 8]) -> [f64; 8] {
     let zero = _mm512_setzero_si512();
     let one = _mm512_set1_epi64(1);
     let ones = _mm512_set1_epi64(-1);
-    let wd_vec = _mm512_set_epi64(wd[7] as i64, wd[6] as i64, wd[5] as i64, wd[4] as i64, wd[3] as i64, wd[2] as i64, wd[1] as i64, wd[0] as i64);
-    let nmask_vec = _mm512_set_epi64(n_mask[7] as i64, n_mask[6] as i64, n_mask[5] as i64, n_mask[4] as i64, n_mask[3] as i64, n_mask[2] as i64, n_mask[1] as i64, n_mask[0] as i64);
+    let wd_vec = _mm512_set_epi64(
+        wd[7] as i64,
+        wd[6] as i64,
+        wd[5] as i64,
+        wd[4] as i64,
+        wd[3] as i64,
+        wd[2] as i64,
+        wd[1] as i64,
+        wd[0] as i64,
+    );
+    let nmask_vec = _mm512_set_epi64(
+        n_mask[7] as i64,
+        n_mask[6] as i64,
+        n_mask[5] as i64,
+        n_mask[4] as i64,
+        n_mask[3] as i64,
+        n_mask[2] as i64,
+        n_mask[1] as i64,
+        n_mask[0] as i64,
+    );
     let nm1_vec = _mm512_set_epi64(
-        lens[7].saturating_sub(1) as i64, lens[6].saturating_sub(1) as i64,
-        lens[5].saturating_sub(1) as i64, lens[4].saturating_sub(1) as i64,
-        lens[3].saturating_sub(1) as i64, lens[2].saturating_sub(1) as i64,
-        lens[1].saturating_sub(1) as i64, lens[0].saturating_sub(1) as i64,
+        lens[7].saturating_sub(1) as i64,
+        lens[6].saturating_sub(1) as i64,
+        lens[5].saturating_sub(1) as i64,
+        lens[4].saturating_sub(1) as i64,
+        lens[3].saturating_sub(1) as i64,
+        lens[2].saturating_sub(1) as i64,
+        lens[1].saturating_sub(1) as i64,
+        lens[0].saturating_sub(1) as i64,
     );
 
     let mut matched_b = zero;
@@ -852,10 +994,19 @@ unsafe fn jaro_8way_avx512(a: &[u8], texts: [&[u8]; 8]) -> [f64; 8] {
 
         let ai = a[i] as usize;
         let p = _mm512_set_epi64(
-            pos[7][ai] as i64, pos[6][ai] as i64, pos[5][ai] as i64, pos[4][ai] as i64,
-            pos[3][ai] as i64, pos[2][ai] as i64, pos[1][ai] as i64, pos[0][ai] as i64,
+            pos[7][ai] as i64,
+            pos[6][ai] as i64,
+            pos[5][ai] as i64,
+            pos[4][ai] as i64,
+            pos[3][ai] as i64,
+            pos[2][ai] as i64,
+            pos[1][ai] as i64,
+            pos[0][ai] as i64,
         );
-        let cand = _mm512_and_si512(_mm512_and_si512(p, window), _mm512_andnot_si512(matched_b, ones));
+        let cand = _mm512_and_si512(
+            _mm512_and_si512(p, window),
+            _mm512_andnot_si512(matched_b, ones),
+        );
 
         let hit_k = _mm512_cmpeq_epi64_mask(cand, zero);
         let hit = _mm512_maskz_mov_epi64(hit_k ^ 0xFF, one);
@@ -869,7 +1020,15 @@ unsafe fn jaro_8way_avx512(a: &[u8], texts: [&[u8]; 8]) -> [f64; 8] {
     let ma: [u64; 8] = std::mem::transmute(matched_a);
     let mc: [u64; 8] = std::mem::transmute(counts);
     std::array::from_fn(|lane| {
-        jaro_score_from_masks(a, texts[lane], ma[lane], mb[lane], mc[lane], m as u64, lens[lane] as u64)
+        jaro_score_from_masks(
+            a,
+            texts[lane],
+            ma[lane],
+            mb[lane],
+            mc[lane],
+            m as u64,
+            lens[lane] as u64,
+        )
     })
 }
 
@@ -925,7 +1084,10 @@ pub(crate) unsafe fn jaro_2way_neon(a: &[u8], texts: [&[u8]; 2]) -> [f64; 2] {
         let hi = vbslq_u64(lt, hi_raw, nm1_v);
         // hi_mask = (1 << (hi+1)) - 1; NEON vshl needs signed shift counts
         // and saturates at >= 64 to 0.
-        let hi_mask = vsubq_u64(vshlq_u64(one_u, vreinterpretq_s64_u64(vaddq_u64(hi, one_u))), one_u);
+        let hi_mask = vsubq_u64(
+            vshlq_u64(one_u, vreinterpretq_s64_u64(vaddq_u64(hi, one_u))),
+            one_u,
+        );
         let lo_mask = vsubq_u64(vshlq_u64(one_u, vreinterpretq_s64_u64(lo)), one_u);
         let window = vandq_u64(vandq_u64(hi_mask, veorq_u64(lo_mask, ones_u)), nmask_v);
 
@@ -935,7 +1097,10 @@ pub(crate) unsafe fn jaro_2way_neon(a: &[u8], texts: [&[u8]; 2]) -> [f64; 2] {
 
         let hit_bool = vshrq_n_u64(veorq_u64(vceqq_u64(cand, zero_u), ones_u), 63);
         counts = vaddq_u64(counts, hit_bool);
-        let lowest = vandq_u64(cand, vreinterpretq_u64_s64(vnegq_s64(vreinterpretq_s64_u64(cand))));
+        let lowest = vandq_u64(
+            cand,
+            vreinterpretq_u64_s64(vnegq_s64(vreinterpretq_s64_u64(cand))),
+        );
         matched_b = vorrq_u64(matched_b, lowest);
         matched_a = vorrq_u64(matched_a, vshlq_u64(hit_bool, i_s));
     }
@@ -944,12 +1109,28 @@ pub(crate) unsafe fn jaro_2way_neon(a: &[u8], texts: [&[u8]; 2]) -> [f64; 2] {
     let ma: [u64; 2] = std::mem::transmute(matched_a);
     let mc: [u64; 2] = std::mem::transmute(counts);
     std::array::from_fn(|lane| {
-        jaro_score_from_masks(a, texts[lane], ma[lane], mb[lane], mc[lane], m as u64, lens[lane] as u64)
+        jaro_score_from_masks(
+            a,
+            texts[lane],
+            ma[lane],
+            mb[lane],
+            mc[lane],
+            m as u64,
+            lens[lane] as u64,
+        )
     })
 }
 
 /// Shared scalar tail: ordered transposition count + the Jaro score formula.
-fn jaro_score_from_masks(a: &[u8], b: &[u8], matched_a: u64, matched_b: u64, matches: u64, m: u64, n: u64) -> f64 {
+fn jaro_score_from_masks(
+    a: &[u8],
+    b: &[u8],
+    matched_a: u64,
+    matched_b: u64,
+    matches: u64,
+    m: u64,
+    n: u64,
+) -> f64 {
     if matches == 0 {
         return 0.0;
     }
@@ -977,7 +1158,12 @@ fn jaro_score_from_masks(a: &[u8], b: &[u8], matched_a: u64, matched_b: u64, mat
 unsafe fn jaro_4way_avx2(a: &[u8], texts: [&[u8]; 4]) -> [f64; 4] {
     use std::arch::x86_64::*;
     let m = a.len();
-    let lens = [texts[0].len(), texts[1].len(), texts[2].len(), texts[3].len()];
+    let lens = [
+        texts[0].len(),
+        texts[1].len(),
+        texts[2].len(),
+        texts[3].len(),
+    ];
 
     // Per-lane position tables: pos[lane][c] = bitmask of positions j in
     // texts[lane] where texts[lane][j] == c (scalar build, one pass per lane).
@@ -994,7 +1180,12 @@ unsafe fn jaro_4way_avx2(a: &[u8], texts: [&[u8]; 4]) -> [f64; 4] {
     let one = _mm256_set1_epi64x(1);
     let ones = _mm256_set1_epi64x(-1);
     let wd_vec = _mm256_set_epi64x(wd[3] as i64, wd[2] as i64, wd[1] as i64, wd[0] as i64);
-    let nmask_vec = _mm256_set_epi64x(n_mask[3] as i64, n_mask[2] as i64, n_mask[1] as i64, n_mask[0] as i64);
+    let nmask_vec = _mm256_set_epi64x(
+        n_mask[3] as i64,
+        n_mask[2] as i64,
+        n_mask[1] as i64,
+        n_mask[0] as i64,
+    );
     let nm1_vec = _mm256_set_epi64x(
         lens[3].saturating_sub(1) as i64,
         lens[2].saturating_sub(1) as i64,
@@ -1015,11 +1206,7 @@ unsafe fn jaro_4way_avx2(a: &[u8], texts: [&[u8]; 4]) -> [f64; 4] {
         // hi = min(i + wd, n - 1): both operands are small non-negative, so
         // signed compare == unsigned compare here.
         let hi_raw = _mm256_add_epi64(i_vec, wd_vec);
-        let hi = _mm256_blendv_epi8(
-            hi_raw,
-            nm1_vec,
-            _mm256_cmpgt_epi64(hi_raw, nm1_vec),
-        );
+        let hi = _mm256_blendv_epi8(hi_raw, nm1_vec, _mm256_cmpgt_epi64(hi_raw, nm1_vec));
         // hi_mask = (1 << (hi+1)) - 1; the variable shift saturates: a count
         // of 64 yields 0, so subtract gives u64::MAX (the hi == n == 64 case).
         let hi_mask = _mm256_sub_epi64(_mm256_sllv_epi64(one, _mm256_add_epi64(hi, one)), one);
@@ -1038,7 +1225,10 @@ unsafe fn jaro_4way_avx2(a: &[u8], texts: [&[u8]; 4]) -> [f64; 4] {
             pos[1][ai] as i64,
             pos[0][ai] as i64,
         );
-        let cand = _mm256_and_si256(_mm256_and_si256(p, window), _mm256_andnot_si256(matched_b, ones));
+        let cand = _mm256_and_si256(
+            _mm256_and_si256(p, window),
+            _mm256_andnot_si256(matched_b, ones),
+        );
 
         let hit = _mm256_andnot_si256(_mm256_cmpeq_epi64(cand, zero), one); // 1 if matched
         counts = _mm256_add_epi64(counts, hit);
@@ -1052,7 +1242,15 @@ unsafe fn jaro_4way_avx2(a: &[u8], texts: [&[u8]; 4]) -> [f64; 4] {
     let mc: [u64; 4] = std::mem::transmute(counts);
     let mut out = [0.0f64; 4];
     for lane in 0..4 {
-        out[lane] = jaro_score_from_masks(a, texts[lane], ma[lane], mb[lane], mc[lane], m as u64, lens[lane] as u64);
+        out[lane] = jaro_score_from_masks(
+            a,
+            texts[lane],
+            ma[lane],
+            mb[lane],
+            mc[lane],
+            m as u64,
+            lens[lane] as u64,
+        );
     }
     out
 }
@@ -1080,13 +1278,25 @@ fn levenshtein_dp_optimized(a: &[u8], b: &[u8]) -> u32 {
 
 /// Optimized Needleman-Wunsch with cache-friendly loop tiling.
 /// (Renamed from `needleman_wunsch_simd` — no actual SIMD intrinsics are used.)
-pub fn needleman_wunsch_striped(a: &[u8], b: &[u8], match_score: i64, mismatch_score: i64, gap_penalty: i64) -> i64 {
+pub fn needleman_wunsch_striped(
+    a: &[u8],
+    b: &[u8],
+    match_score: i64,
+    mismatch_score: i64,
+    gap_penalty: i64,
+) -> i64 {
     let (m, n) = (a.len(), b.len());
-    if m == 0 { return sat_mul(n as i64, gap_penalty); }
-    if n == 0 { return sat_mul(m as i64, gap_penalty); }
+    if m == 0 {
+        return sat_mul(n as i64, gap_penalty);
+    }
+    if n == 0 {
+        return sat_mul(m as i64, gap_penalty);
+    }
 
     // Fast path: identical strings.
-    if a == b { return sat_mul(m as i64, match_score); }
+    if a == b {
+        return sat_mul(m as i64, match_score);
+    }
 
     // Single-row + diagonal optimization.
     let mut row = vec![0i64; n + 1];
@@ -1105,7 +1315,11 @@ pub fn needleman_wunsch_striped(a: &[u8], b: &[u8], match_score: i64, mismatch_s
             for k in 0..8usize {
                 let jj = j + k;
                 let old = row[jj];
-                let cost = if ai == b[jj - 1] { match_score } else { mismatch_score };
+                let cost = if ai == b[jj - 1] {
+                    match_score
+                } else {
+                    mismatch_score
+                };
                 row[jj] = sat_add(prev_diag, cost)
                     .max(sat_add(row[jj], gap_penalty))
                     .max(sat_add(row[jj - 1], gap_penalty));
@@ -1116,7 +1330,11 @@ pub fn needleman_wunsch_striped(a: &[u8], b: &[u8], match_score: i64, mismatch_s
         // Remainder.
         while j <= n {
             let old = row[j];
-            let cost = if ai == b[j - 1] { match_score } else { mismatch_score };
+            let cost = if ai == b[j - 1] {
+                match_score
+            } else {
+                mismatch_score
+            };
             row[j] = sat_add(prev_diag, cost)
                 .max(sat_add(row[j], gap_penalty))
                 .max(sat_add(row[j - 1], gap_penalty));
@@ -1134,9 +1352,15 @@ pub fn needleman_wunsch_striped(a: &[u8], b: &[u8], match_score: i64, mismatch_s
 /// inner implementation for both stack and heap paths (no code duplication).
 pub fn jaro_optimized(a: &[u8], b: &[u8]) -> f64 {
     let (m, n) = (a.len(), b.len());
-    if m == 0 && n == 0 { return 1.0; }
-    if m == 0 || n == 0 { return 0.0; }
-    if a == b { return 1.0; }
+    if m == 0 && n == 0 {
+        return 1.0;
+    }
+    if m == 0 || n == 0 {
+        return 0.0;
+    }
+    if a == b {
+        return 1.0;
+    }
 
     let match_distance = (m.max(n) / 2).saturating_sub(1);
 
@@ -1144,7 +1368,13 @@ pub fn jaro_optimized(a: &[u8], b: &[u8]) -> f64 {
         // Stack-allocated flags for short strings to avoid heap allocation.
         let mut a_matches = [false; 128];
         let mut b_matches = [false; 128];
-        jaro_inner_slice(a, b, &mut a_matches[..m], &mut b_matches[..n], match_distance)
+        jaro_inner_slice(
+            a,
+            b,
+            &mut a_matches[..m],
+            &mut b_matches[..n],
+            match_distance,
+        )
     } else {
         // Heap path only for strings > 128 bytes (rare in fuzzy matching).
         let mut a_matches = vec![false; m];
@@ -1155,7 +1385,13 @@ pub fn jaro_optimized(a: &[u8], b: &[u8]) -> f64 {
 
 /// Single implementation shared by the stack and heap allocation paths.
 #[inline]
-fn jaro_inner_slice(a: &[u8], b: &[u8], a_matches: &mut [bool], b_matches: &mut [bool], match_distance: usize) -> f64 {
+fn jaro_inner_slice(
+    a: &[u8],
+    b: &[u8],
+    a_matches: &mut [bool],
+    b_matches: &mut [bool],
+    match_distance: usize,
+) -> f64 {
     let (m, n) = (a.len(), b.len());
     let mut matches = 0u32;
 
@@ -1164,7 +1400,9 @@ fn jaro_inner_slice(a: &[u8], b: &[u8], a_matches: &mut [bool], b_matches: &mut 
         let hi = (i + match_distance + 1).min(n);
         let ai = a[i];
         for j in lo..hi {
-            if b_matches[j] || ai != b[j] { continue; }
+            if b_matches[j] || ai != b[j] {
+                continue;
+            }
             a_matches[i] = true;
             b_matches[j] = true;
             matches += 1;
@@ -1172,20 +1410,29 @@ fn jaro_inner_slice(a: &[u8], b: &[u8], a_matches: &mut [bool], b_matches: &mut 
         }
     }
 
-    if matches == 0 { return 0.0; }
+    if matches == 0 {
+        return 0.0;
+    }
 
     let mut transpositions = 0u32;
     let mut k = 0;
     for i in 0..m {
-        if !a_matches[i] { continue; }
-        while !b_matches[k] { k += 1; }
-        if a[i] != b[k] { transpositions += 1; }
+        if !a_matches[i] {
+            continue;
+        }
+        while !b_matches[k] {
+            k += 1;
+        }
+        if a[i] != b[k] {
+            transpositions += 1;
+        }
         k += 1;
     }
 
     (matches as f64 / m as f64
         + matches as f64 / n as f64
-        + (matches as f64 - (transpositions / 2) as f64) / matches as f64) / 3.0
+        + (matches as f64 - (transpositions / 2) as f64) / matches as f64)
+        / 3.0
 }
 
 #[cfg(test)]
@@ -1234,9 +1481,7 @@ mod tests {
             let len = [0usize, 1, 8, 40][i];
             (0..len).map(|_| b'a' + (gen() % 26) as u8).collect()
         });
-        let got = levenshtein_myers_4way(&pattern, [
-            &texts[0], &texts[1], &texts[2], &texts[3],
-        ]);
+        let got = levenshtein_myers_4way(&pattern, [&texts[0], &texts[1], &texts[2], &texts[3]]);
         for i in 0..4 {
             let expect = levenshtein_myers(&pattern, &texts[i]);
             assert_eq!(got[i], expect, "lane {} mismatch", i);
@@ -1251,14 +1496,17 @@ mod tests {
             state ^= state >> 7;
             state ^= state << 17;
             let m = 1 + (state % 64) as usize;
-            let pattern: Vec<u8> = (0..m).map(|_| b'a' + (state.wrapping_mul(31) % 26) as u8).collect();
+            let pattern: Vec<u8> = (0..m)
+                .map(|_| b'a' + (state.wrapping_mul(31) % 26) as u8)
+                .collect();
             let texts: [Vec<u8>; 4] = std::array::from_fn(|i| {
                 let len = (state.wrapping_mul(97 + i as u64) % 80) as usize;
-                (0..len).map(|_| b'a' + (state.wrapping_mul(17 + i as u64) % 26) as u8).collect()
+                (0..len)
+                    .map(|_| b'a' + (state.wrapping_mul(17 + i as u64) % 26) as u8)
+                    .collect()
             });
-            let got = levenshtein_myers_4way(&pattern, [
-                &texts[0], &texts[1], &texts[2], &texts[3],
-            ]);
+            let got =
+                levenshtein_myers_4way(&pattern, [&texts[0], &texts[1], &texts[2], &texts[3]]);
             for i in 0..4 {
                 let expect = levenshtein_myers(&pattern, &texts[i]);
                 assert_eq!(got[i], expect, "round {} lane {} mismatch", round, i);
@@ -1281,16 +1529,28 @@ mod tests {
             let pattern: Vec<u8> = (0..m).map(|_| b'a' + (state % 26) as u8).collect();
             let texts: [Vec<u8>; 8] = std::array::from_fn(|i| {
                 let len = (state.wrapping_mul(3 + i as u64) % 90) as usize;
-                (0..len).map(|_| b'a' + (state.wrapping_mul(5 + i as u64) % 26) as u8).collect()
+                (0..len)
+                    .map(|_| b'a' + (state.wrapping_mul(5 + i as u64) % 26) as u8)
+                    .collect()
             });
             let pat = MyersPattern::new(&pattern);
-            let expect = levenshtein_myers_8way(&pat, [
-                &texts[0], &texts[1], &texts[2], &texts[3], &texts[4], &texts[5], &texts[6], &texts[7],
-            ]);
+            let expect = levenshtein_myers_8way(
+                &pat,
+                [
+                    &texts[0], &texts[1], &texts[2], &texts[3], &texts[4], &texts[5], &texts[6],
+                    &texts[7],
+                ],
+            );
             // SAFETY: guarded by is_x86_feature_detected! above.
-            let avx512 = unsafe { levenshtein_myers_8way_avx512(&pat, [
-                &texts[0], &texts[1], &texts[2], &texts[3], &texts[4], &texts[5], &texts[6], &texts[7],
-            ]) };
+            let avx512 = unsafe {
+                levenshtein_myers_8way_avx512(
+                    &pat,
+                    [
+                        &texts[0], &texts[1], &texts[2], &texts[3], &texts[4], &texts[5],
+                        &texts[6], &texts[7],
+                    ],
+                )
+            };
             assert_eq!(expect, avx512);
             // And every lane must match the scalar Myers.
             for (i, t) in texts.iter().enumerate() {
@@ -1314,15 +1574,28 @@ mod tests {
             let a: Vec<u8> = (0..m).map(|_| b'a' + (state % 26) as u8).collect();
             let texts: [Vec<u8>; 8] = std::array::from_fn(|i| {
                 let n = (state.wrapping_mul(7 + i as u64) % 65) as usize;
-                (0..n).map(|_| b'a' + (state.wrapping_mul(11 + i as u64) % 26) as u8).collect()
+                (0..n)
+                    .map(|_| b'a' + (state.wrapping_mul(11 + i as u64) % 26) as u8)
+                    .collect()
             });
             // SAFETY: guarded by is_x86_feature_detected! above.
-            let avx512 = unsafe { jaro_8way_avx512(&a, [
-                &texts[0], &texts[1], &texts[2], &texts[3], &texts[4], &texts[5], &texts[6], &texts[7],
-            ]) };
+            let avx512 = unsafe {
+                jaro_8way_avx512(
+                    &a,
+                    [
+                        &texts[0], &texts[1], &texts[2], &texts[3], &texts[4], &texts[5],
+                        &texts[6], &texts[7],
+                    ],
+                )
+            };
             for i in 0..8 {
                 let expect = jaro_bitpar(&a, &texts[i]);
-                assert!((avx512[i] - expect).abs() < 1e-12, "lane {i}: {} != {}", avx512[i], expect);
+                assert!(
+                    (avx512[i] - expect).abs() < 1e-12,
+                    "lane {i}: {} != {}",
+                    avx512[i],
+                    expect
+                );
             }
         }
     }
@@ -1339,7 +1612,9 @@ mod tests {
             let pattern: Vec<u8> = (0..m).map(|_| b'a' + (state % 26) as u8).collect();
             let texts: [Vec<u8>; 2] = std::array::from_fn(|i| {
                 let len = (state.wrapping_mul(3 + i as u64) % 90) as usize;
-                (0..len).map(|_| b'a' + (state.wrapping_mul(5 + i as u64) % 26) as u8).collect()
+                (0..len)
+                    .map(|_| b'a' + (state.wrapping_mul(5 + i as u64) % 26) as u8)
+                    .collect()
             });
             let pat = MyersPattern::new(&pattern);
             // SAFETY: NEON is mandatory on aarch64.
@@ -1362,13 +1637,20 @@ mod tests {
             let a: Vec<u8> = (0..m).map(|_| b'a' + (state % 26) as u8).collect();
             let texts: [Vec<u8>; 2] = std::array::from_fn(|i| {
                 let n = (state.wrapping_mul(7 + i as u64) % 65) as usize;
-                (0..n).map(|_| b'a' + (state.wrapping_mul(11 + i as u64) % 26) as u8).collect()
+                (0..n)
+                    .map(|_| b'a' + (state.wrapping_mul(11 + i as u64) % 26) as u8)
+                    .collect()
             });
             // SAFETY: NEON is mandatory on aarch64.
             let neon = unsafe { jaro_2way_neon(&a, [&texts[0], &texts[1]]) };
             for i in 0..2 {
                 let expect = jaro_bitpar(&a, &texts[i]);
-                assert!((neon[i] - expect).abs() < 1e-12, "lane {i}: {} != {}", neon[i], expect);
+                assert!(
+                    (neon[i] - expect).abs() < 1e-12,
+                    "lane {i}: {} != {}",
+                    neon[i],
+                    expect
+                );
             }
         }
     }
@@ -1388,16 +1670,17 @@ mod tests {
             let pattern: Vec<u8> = (0..m).map(|_| b'a' + (state % 26) as u8).collect();
             let texts: [Vec<u8>; 4] = std::array::from_fn(|i| {
                 let len = (state.wrapping_mul(3 + i as u64) % 100) as usize;
-                (0..len).map(|_| b'a' + (state.wrapping_mul(5 + i as u64) % 26) as u8).collect()
+                (0..len)
+                    .map(|_| b'a' + (state.wrapping_mul(5 + i as u64) % 26) as u8)
+                    .collect()
             });
             let pat = MyersPattern::new(&pattern);
-            let portable = levenshtein_myers_4way_portable(&pat, [
-                &texts[0], &texts[1], &texts[2], &texts[3],
-            ]);
+            let portable =
+                levenshtein_myers_4way_portable(&pat, [&texts[0], &texts[1], &texts[2], &texts[3]]);
             // SAFETY: guarded by is_x86_feature_detected! above.
-            let avx2 = unsafe { levenshtein_myers_4way_avx2(&pat, [
-                &texts[0], &texts[1], &texts[2], &texts[3],
-            ]) };
+            let avx2 = unsafe {
+                levenshtein_myers_4way_avx2(&pat, [&texts[0], &texts[1], &texts[2], &texts[3]])
+            };
             assert_eq!(portable, avx2);
         }
     }
@@ -1412,9 +1695,7 @@ mod tests {
             (0..65).map(|i| b'a' + (i % 26)).collect(),
             (0..128).map(|i| b'b' + (i % 26)).collect(),
         ];
-        let got = levenshtein_myers_4way(&pattern, [
-            &texts[0], &texts[1], &texts[2], &texts[3],
-        ]);
+        let got = levenshtein_myers_4way(&pattern, [&texts[0], &texts[1], &texts[2], &texts[3]]);
         for i in 0..4 {
             assert_eq!(got[i], levenshtein_myers(&pattern, &texts[i]), "lane {}", i);
         }
@@ -1467,9 +1748,13 @@ mod tests {
             state ^= state >> 7;
             state ^= state << 17;
             let m = (state % 65) as usize;
-            let a: Vec<u8> = (0..m).map(|_| b'a' + (state.wrapping_mul(31) % 26) as u8).collect();
+            let a: Vec<u8> = (0..m)
+                .map(|_| b'a' + (state.wrapping_mul(31) % 26) as u8)
+                .collect();
             let n = (state.wrapping_mul(97) % 65) as usize;
-            let b: Vec<u8> = (0..n).map(|_| b'a' + (state.wrapping_mul(17) % 26) as u8).collect();
+            let b: Vec<u8> = (0..n)
+                .map(|_| b'a' + (state.wrapping_mul(17) % 26) as u8)
+                .collect();
             let oa = String::from_utf8(a.clone()).unwrap();
             let ob = String::from_utf8(b.clone()).unwrap();
             let got = jaro_bitpar(&a, &b);
@@ -1477,7 +1762,8 @@ mod tests {
             assert!(
                 (got - expect).abs() < 1e-12,
                 "random mismatch: {:?} vs {:?}: {got} != {expect}",
-                oa, ob
+                oa,
+                ob
             );
         }
     }
@@ -1501,7 +1787,12 @@ mod tests {
             let got = jaro_4way(&a, [&texts[0], &texts[1], &texts[2], &texts[3]]);
             for i in 0..4 {
                 let expect = jaro_bitpar(&a, &texts[i]);
-                assert!((got[i] - expect).abs() < 1e-12, "lane {i} mismatch: {} != {}", got[i], expect);
+                assert!(
+                    (got[i] - expect).abs() < 1e-12,
+                    "lane {i} mismatch: {} != {}",
+                    got[i],
+                    expect
+                );
             }
         }
     }
@@ -1521,13 +1812,20 @@ mod tests {
             let a: Vec<u8> = (0..m).map(|_| b'a' + (state % 26) as u8).collect();
             let texts: [Vec<u8>; 4] = std::array::from_fn(|i| {
                 let n = (state.wrapping_mul(3 + i as u64) % 65) as usize;
-                (0..n).map(|_| b'a' + (state.wrapping_mul(5 + i as u64) % 26) as u8).collect()
+                (0..n)
+                    .map(|_| b'a' + (state.wrapping_mul(5 + i as u64) % 26) as u8)
+                    .collect()
             });
             // SAFETY: guarded by is_x86_feature_detected! above.
             let avx2 = unsafe { jaro_4way_avx2(&a, [&texts[0], &texts[1], &texts[2], &texts[3]]) };
             for i in 0..4 {
                 let expect = jaro_bitpar(&a, &texts[i]);
-                assert!((avx2[i] - expect).abs() < 1e-12, "lane {i} mismatch: {} != {}", avx2[i], expect);
+                assert!(
+                    (avx2[i] - expect).abs() < 1e-12,
+                    "lane {i} mismatch: {} != {}",
+                    avx2[i],
+                    expect
+                );
             }
         }
     }
@@ -1536,8 +1834,17 @@ mod tests {
     fn test_jaro_optimized_matches_reference() {
         use crate::jaro;
         // Stack path (≤ 128 bytes).
-        for (a, b) in [("MARTHA", "MARHTA"), ("DIXON", "DICKSONX"), ("kitten", "sitting")] {
-            assert!((jaro_optimized(a.as_bytes(), b.as_bytes()) - jaro(a, b)).abs() < 1e-12, "{} vs {}", a, b);
+        for (a, b) in [
+            ("MARTHA", "MARHTA"),
+            ("DIXON", "DICKSONX"),
+            ("kitten", "sitting"),
+        ] {
+            assert!(
+                (jaro_optimized(a.as_bytes(), b.as_bytes()) - jaro(a, b)).abs() < 1e-12,
+                "{} vs {}",
+                a,
+                b
+            );
         }
         // Heap path (> 128 bytes) — must agree with the reference too.
         let long_a: Vec<u8> = (0..200).map(|i| b'a' + (i % 26)).collect();
@@ -1546,18 +1853,30 @@ mod tests {
         let ob = String::from_utf8(long_b).unwrap();
         let simd = jaro_optimized(oa.as_bytes(), ob.as_bytes());
         let reference = jaro(&oa, &ob);
-        assert!((simd - reference).abs() < 1e-12, "heap path mismatch: {} vs {}", simd, reference);
+        assert!(
+            (simd - reference).abs() < 1e-12,
+            "heap path mismatch: {} vs {}",
+            simd,
+            reference
+        );
     }
 
     #[test]
     fn test_needleman_wunsch_striped_matches_reference() {
         use crate::needleman_wunsch;
-        let cases = [("AGCT", "AGCT"), ("kitten", "sitting"), ("ACGT", "AT"), ("hello", "world")];
+        let cases = [
+            ("AGCT", "AGCT"),
+            ("kitten", "sitting"),
+            ("ACGT", "AT"),
+            ("hello", "world"),
+        ];
         for (a, b) in cases {
             assert_eq!(
                 needleman_wunsch_striped(a.as_bytes(), b.as_bytes(), 2, -1, -1),
                 needleman_wunsch(a, b, 2, -1, -1),
-                "{} vs {}", a, b
+                "{} vs {}",
+                a,
+                b
             );
         }
     }

@@ -13,7 +13,9 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use fuzzgpu_core::damerau::damerau_levenshtein_batch;
 use fuzzgpu_core::fuzz::ratio;
 use fuzzgpu_core::jaro::{jaro_winkler, jaro_winkler_batch};
-use fuzzgpu_core::levenshtein::{levenshtein_cdist_cpu, levenshtein_distance_raw, LevenshteinKernel};
+use fuzzgpu_core::levenshtein::{
+    levenshtein_cdist_cpu, levenshtein_distance_raw, LevenshteinKernel,
+};
 use fuzzgpu_core::needleman::{needleman_wunsch_affine, needleman_wunsch_affine_batch};
 use fuzzgpu_core::simd::levenshtein_myers;
 
@@ -24,7 +26,9 @@ fn gen_strings(count: usize, len: usize, seed: u64) -> Vec<String> {
     for _ in 0..count {
         let mut s = String::with_capacity(len);
         for _ in 0..len {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             s.push((b'a' + ((state >> 33) as u8 % 26)) as char);
         }
         out.push(s);
@@ -47,7 +51,11 @@ fn cpu_benches(c: &mut Criterion) {
     let long = gen_strings(2, 256, 3);
 
     let mut g = c.benchmark_group("scalar");
-    for (name, s) in [("short_8", &short), ("medium_64", &medium), ("long_256", &long)] {
+    for (name, s) in [
+        ("short_8", &short),
+        ("medium_64", &medium),
+        ("long_256", &long),
+    ] {
         let (s1, s2) = (&s[0], &s[1]);
         g.bench_function(format!("levenshtein/{name}"), |b| {
             b.iter(|| black_box(levenshtein_distance_raw(s1, s2)))
@@ -62,7 +70,11 @@ fn cpu_benches(c: &mut Criterion) {
             b.iter(|| black_box(ratio(s1, s2)))
         });
         g.bench_function(format!("needleman_affine/{name}"), |b| {
-            b.iter(|| black_box(needleman_wunsch_affine(s1, s2, MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND)))
+            b.iter(|| {
+                black_box(needleman_wunsch_affine(
+                    s1, s2, MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND,
+                ))
+            })
         });
         g.bench_function(format!("damerau/{name}"), |b| {
             b.iter(|| black_box(fuzzgpu_core::damerau::damerau_levenshtein_distance(s1, s2)))
@@ -89,14 +101,27 @@ fn cpu_benches(c: &mut Criterion) {
         b.iter(|| black_box(jaro_winkler_batch(query, &cand_refs, 0.1)))
     });
     g.bench_function("needleman_affine_batch_1000", |b| {
-        b.iter(|| black_box(needleman_wunsch_affine_batch(query, &cand_refs, MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND)))
+        b.iter(|| {
+            black_box(needleman_wunsch_affine_batch(
+                query, &cand_refs, MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND,
+            ))
+        })
     });
     // Long-string needleman (80 chars): the anti-diagonal wavefront GPU path's
     // target workload; Rayon CPU is the comparison baseline.
     let cands_nw80 = gen_strings(1000, 80, 0xAB);
     let cand_refs_nw80: Vec<&str> = cands_nw80.iter().map(|s| s.as_str()).collect();
     g.bench_function("needleman_affine_batch_1000_long80_large", |b| {
-        b.iter(|| black_box(needleman_wunsch_affine_batch(query, &cand_refs_nw80, MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND)))
+        b.iter(|| {
+            black_box(needleman_wunsch_affine_batch(
+                query,
+                &cand_refs_nw80,
+                MATCH,
+                MISMATCH,
+                GAP_OPEN,
+                GAP_EXTEND,
+            ))
+        })
     });
     g.bench_function("damerau_batch_1000", |b| {
         b.iter(|| black_box(damerau_levenshtein_batch(query, &cand_refs)))
@@ -128,8 +153,9 @@ fn cpu_benches(c: &mut Criterion) {
         b.iter(|| black_box(levenshtein_cdist_cpu(&refs_a_1k, &refs_b_1k)))
     });
     // Sequential 10 x 1000 pairs: the CPU baseline for the batched-GPU bench.
-    let cands10: Vec<Vec<String>> =
-        (0..10).map(|i| gen_strings(1000, 16, 0x100 + i as u64)).collect();
+    let cands10: Vec<Vec<String>> = (0..10)
+        .map(|i| gen_strings(1000, 16, 0x100 + i as u64))
+        .collect();
     let ops10: Vec<Vec<(&str, &str)>> = cands10.iter().map(|c| make_pairs(query, c)).collect();
     g.bench_function("levenshtein_10x1000_seq_cpu", |b| {
         b.iter(|| {
@@ -190,13 +216,23 @@ fn gpu_benches(c: &mut Criterion) {
     match GpuNeedlemanAffineKernel::get() {
         Ok(kernel) => {
             g.bench_function("needleman_affine_batch_1000", |b| {
-                b.iter(|| black_box(kernel.compute_batch(&pairs, MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND)))
+                b.iter(|| {
+                    black_box(kernel.compute_batch(&pairs, MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND))
+                })
             });
             // 80-char pairs: routes to the anti-diagonal wavefront kernel.
             let cands_nw80 = gen_strings(1000, 80, 0xAB);
             let pairs_nw80 = make_pairs(query, &cands_nw80);
             g.bench_function("needleman_affine_batch_1000_long80_large", |b| {
-                b.iter(|| black_box(kernel.compute_batch(&pairs_nw80, MATCH, MISMATCH, GAP_OPEN, GAP_EXTEND)))
+                b.iter(|| {
+                    black_box(kernel.compute_batch(
+                        &pairs_nw80,
+                        MATCH,
+                        MISMATCH,
+                        GAP_OPEN,
+                        GAP_EXTEND,
+                    ))
+                })
             });
         }
         Err(e) => {
@@ -247,9 +283,11 @@ fn gpu_benches(c: &mut Criterion) {
             });
             // 10 x 1000 pairs: one batched dispatch+readback vs 10 sequential
             // sync-round-trips. Same total work as cpu_batch/..._seq_cpu.
-            let cands10: Vec<Vec<String>> =
-                (0..10).map(|i| gen_strings(1000, 16, 0x100 + i as u64)).collect();
-            let ops10: Vec<Vec<(&str, &str)>> = cands10.iter().map(|c| make_pairs(query, c)).collect();
+            let cands10: Vec<Vec<String>> = (0..10)
+                .map(|i| gen_strings(1000, 16, 0x100 + i as u64))
+                .collect();
+            let ops10: Vec<Vec<(&str, &str)>> =
+                cands10.iter().map(|c| make_pairs(query, c)).collect();
             g.bench_function("levenshtein_10x1000_seq", |b| {
                 b.iter(|| {
                     for op in &ops10 {
@@ -268,10 +306,16 @@ fn gpu_benches(c: &mut Criterion) {
             });
         }
         Err(e) => {
-            eprintln!("WARN: no GPU device, skipping large-scale GpuLevenshteinKernel benches: {e}");
+            eprintln!(
+                "WARN: no GPU device, skipping large-scale GpuLevenshteinKernel benches: {e}"
+            );
             g.bench_function("levenshtein_batch_100k_large", |b| b.iter(|| black_box(0)));
-            g.bench_function("levenshtein_batch_1000_long256_large", |b| b.iter(|| black_box(0)));
-            g.bench_function("levenshtein_cdist_1000x1000_large", |b| b.iter(|| black_box(0)));
+            g.bench_function("levenshtein_batch_1000_long256_large", |b| {
+                b.iter(|| black_box(0))
+            });
+            g.bench_function("levenshtein_cdist_1000x1000_large", |b| {
+                b.iter(|| black_box(0))
+            });
             g.bench_function("levenshtein_10x1000_seq", |b| b.iter(|| black_box(0)));
             g.bench_function("levenshtein_10x1000_batched", |b| b.iter(|| black_box(0)));
         }
