@@ -52,6 +52,11 @@ jobs:
   test:
     name: Test on ${{ matrix.os }} (Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    env:
+      # On Windows, enable dispatch-serialization safety valve to avoid the
+      # Vulkan loader use-after-free crash (gfx-rs/wgpu#10085) on real-GPU
+      # CI runners. Applied to both Rust and Python test steps.
+      FUZZGPU_SKIP_DISPATCH_LOCK: ${{ matrix.os == 'windows-latest' && '1' || '' }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -68,17 +73,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust Cargo Tests
-        # On Windows, enable the dispatch-serialization safety valve
-        # (FUZZGPU_SKIP_DISPATCH_LOCK=1) to avoid the Vulkan loader
-        # use-after-free crash (gfx-rs/wgpu#10085) on real-GPU CI runners.
-        # Linux and macOS already run GPU differentials on software Vulkan
-        # (lavapipe) and Metal — both crash-free.
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            FUZZGPU_SKIP_DISPATCH_LOCK=1 cargo test --workspace --verbose --lib
-          else
-            cargo test --workspace --verbose
-          fi
+        run: cargo test --workspace --verbose --lib
         shell: bash
 
       - name: Install dependencies
