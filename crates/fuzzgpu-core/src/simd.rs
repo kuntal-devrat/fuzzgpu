@@ -779,7 +779,7 @@ pub fn jaro_bitpar(a: &[u8], b: &[u8]) -> f64 {
 
         let cand = pos_b[a[i] as usize] & window & !matched_b;
         if cand != 0 {
-            let lowest = cand & cand.wrapping_neg();
+            let lowest = cand.isolate_lowest_one();
             matched_b |= lowest;
             matched_a |= 1u64 << i;
             matches += 1;

@@ -817,7 +817,8 @@ pub mod gpu_ext {
                 // Decode 4×u32 per pair and assemble the f64 score host-side
                 // (bit-exact with the CPU reference). GPU_RECOMPUTE pairs are
                 // returned as -1.0; compute_batch recomputes them on CPU.
-                for (t, part) in raw.chunks_exact(4).enumerate() {
+                for (t, chunk_start) in (0..raw.len()).step_by(4).enumerate() {
+                    let part = &raw[chunk_start..chunk_start + 4];
                     if part[0] == GPU_RECOMPUTE {
                         gpu_results.push(-1.0);
                     } else {
