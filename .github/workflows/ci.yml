@@ -67,15 +67,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust Cargo Tests
-        # On Windows, run only the lib unit tests — the differential integration
-        # tests require a GPU device and DX12 teardown triggers the upstream
-        # wgpu#10085 crash (STATUS_ACCESS_VIOLATION in the driver during Drop)
-        # which the dedicated GPU CI jobs (software Vulkan on Linux, Metal on
-        # macOS) already cover. The lib tests exercise all non-GPU and GPU unit
-        # tests through the production dispatch-lock workaround.
+        # On Windows, enable the dispatch-serialization safety valve
+        # (FUZZGPU_SKIP_DISPATCH_LOCK=1) to avoid the Vulkan loader
+        # use-after-free crash (gfx-rs/wgpu#10085) on real-GPU CI runners.
+        # Linux and macOS already run GPU differentials on software Vulkan
+        # (lavapipe) and Metal — both crash-free.
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cargo test --workspace --verbose --lib
+            FUZZGPU_SKIP_DISPATCH_LOCK=1 cargo test --workspace --verbose --lib
           else
             cargo test --workspace --verbose
           fi
@@ -492,4 +491,4 @@ jobs:
       - name: cargo doc for fuzzgpu-core (core crate)
         run: cargo doc -p fuzzgpu-core --no-deps
       - name: cargo doc for fuzzgpu-wasm (wasm crate)
-        run: cargo doc -p fuzzgpu-wasm --no-deps
+        run: cd crates/fuzzgpu-wasm && cargo doc --no-deps
