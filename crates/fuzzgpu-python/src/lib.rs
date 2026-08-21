@@ -94,7 +94,7 @@ fn checked_u32_array1<'py>(
     expected: usize,
 ) -> PyResult<numpy::PyReadwriteArray1<'py, u32>> {
     use numpy::{PyArray1, PyUntypedArrayMethods};
-    let arr = out.downcast::<PyArray1<u32>>()?;
+    let arr = out.cast::<PyArray1<u32>>()?;
     let rw = readwrite_or_err(arr)?;
     if rw.len() != expected {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -113,7 +113,7 @@ fn checked_f64_array1<'py>(
     expected: usize,
 ) -> PyResult<numpy::PyReadwriteArray1<'py, f64>> {
     use numpy::{PyArray1, PyUntypedArrayMethods};
-    let arr = out.downcast::<PyArray1<f64>>()?;
+    let arr = out.cast::<PyArray1<f64>>()?;
     let rw = readwrite_or_err(arr)?;
     if rw.len() != expected {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -133,7 +133,7 @@ fn checked_u32_array2<'py>(
     cols: usize,
 ) -> PyResult<numpy::PyReadwriteArray2<'py, u32>> {
     use numpy::{PyArray2, PyUntypedArrayMethods};
-    let arr = out.downcast::<PyArray2<u32>>()?;
+    let arr = out.cast::<PyArray2<u32>>()?;
     let rw = readwrite_or_err(arr)?;
     if rw.shape() != [rows, cols] {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -152,7 +152,7 @@ fn checked_f64_array2<'py>(
     cols: usize,
 ) -> PyResult<numpy::PyReadwriteArray2<'py, f64>> {
     use numpy::{PyArray2, PyUntypedArrayMethods};
-    let arr = out.downcast::<PyArray2<f64>>()?;
+    let arr = out.cast::<PyArray2<f64>>()?;
     let rw = readwrite_or_err(arr)?;
     if rw.shape() != [rows, cols] {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -227,7 +227,7 @@ fn write_f64_array2(
 fn levenshtein_distance(py: Python, a: &str, b: &str) -> PyResult<u32> {
     // A single pair never amortizes GPU setup/upload/readback. Batch APIs
     // retain GPU routing once that fixed cost can be amortized.
-    py.allow_threads(|| Ok(fuzzgpu_core::levenshtein_distance_raw(a, b)))
+    py.detach(|| Ok(fuzzgpu_core::levenshtein_distance_raw(a, b)))
 }
 
 /// Shared compute for `levenshtein_batch` / `levenshtein_batch_into`: Myers
@@ -237,7 +237,7 @@ fn levenshtein_batch_core(py: Python<'_>, pairs: &[(&str, &str)]) -> PyResult<Ve
     {
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get() {
-                match py.allow_threads(|| kernel.compute(pairs)) {
+                match py.detach(|| kernel.compute(pairs)) {
                     Ok(res) => return Ok(res),
                     Err(e) => {
                         if is_force_gpu() {
@@ -255,7 +255,7 @@ fn levenshtein_batch_core(py: Python<'_>, pairs: &[(&str, &str)]) -> PyResult<Ve
         }
     }
     let kernel = fuzzgpu_core::LevenshteinKernel;
-    py.allow_threads(|| {
+    py.detach(|| {
         kernel
             .compute(pairs)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -282,7 +282,7 @@ fn levenshtein_cdist_core(
     {
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel::get() {
-                match py.allow_threads(|| kernel.compute_matrix(refs_a, refs_b)) {
+                match py.detach(|| kernel.compute_matrix(refs_a, refs_b)) {
                     Ok(res) => return Ok(res),
                     Err(e) => {
                         if is_force_gpu() {
@@ -299,7 +299,7 @@ fn levenshtein_cdist_core(
             }
         }
     }
-    py.allow_threads(|| {
+    py.detach(|| {
         Ok(fuzzgpu_core::levenshtein::levenshtein_cdist_cpu(
             refs_a, refs_b,
         ))
@@ -364,7 +364,7 @@ fn levenshtein_cdist_into(
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, /)")]
 fn damerau_levenshtein_distance(py: Python, a: &str, b: &str) -> PyResult<u32> {
-    py.allow_threads(|| Ok(fuzzgpu_core::damerau_levenshtein_distance(a, b)))
+    py.detach(|| Ok(fuzzgpu_core::damerau_levenshtein_distance(a, b)))
 }
 
 /// Shared compute for `damerau_levenshtein_batch` / `..._into`: GPU
@@ -375,7 +375,7 @@ fn damerau_batch_core(py: Python<'_>, query: &str, cands: &[&str]) -> PyResult<V
     {
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::damerau::gpu_ext::GpuDamerauKernel::get() {
-                match py.allow_threads(|| kernel.compute_batch(&pairs)) {
+                match py.detach(|| kernel.compute_batch(&pairs)) {
                     Ok(res) => return Ok(res),
                     Err(e) => {
                         if is_force_gpu() {
@@ -392,7 +392,7 @@ fn damerau_batch_core(py: Python<'_>, query: &str, cands: &[&str]) -> PyResult<V
             }
         }
     }
-    py.allow_threads(|| Ok(fuzzgpu_core::damerau_levenshtein_batch(query, cands)))
+    py.detach(|| Ok(fuzzgpu_core::damerau_levenshtein_batch(query, cands)))
 }
 
 #[pyfunction]
@@ -413,7 +413,7 @@ fn damerau_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str]) -> PyRes
     {
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::damerau::gpu_ext::GpuDamerauKernel::get() {
-                match py.allow_threads(|| kernel.compute_matrix(refs_a, refs_b)) {
+                match py.detach(|| kernel.compute_matrix(refs_a, refs_b)) {
                     Ok(res) => return Ok(res),
                     Err(e) => {
                         if is_force_gpu() {
@@ -430,7 +430,7 @@ fn damerau_cdist_core(py: Python<'_>, refs_a: &[&str], refs_b: &[&str]) -> PyRes
             }
         }
     }
-    py.allow_threads(|| Ok(fuzzgpu_core::damerau_levenshtein_cdist(refs_a, refs_b)))
+    py.detach(|| Ok(fuzzgpu_core::damerau_levenshtein_cdist(refs_a, refs_b)))
 }
 
 #[pyfunction]
@@ -486,7 +486,7 @@ fn damerau_levenshtein_cdist_into(
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, /)")]
 fn damerau_ratio(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::damerau_ratio(a, b)))
+    py.detach(|| Ok(fuzzgpu_core::damerau_ratio(a, b)))
 }
 
 // ── Needleman-Wunsch (i64 Score Support) ─────────────────────
@@ -501,7 +501,7 @@ fn needleman_wunsch_score(
     mismatch_score: i64,
     gap_penalty: i64,
 ) -> PyResult<i64> {
-    py.allow_threads(|| {
+    py.detach(|| {
         Ok(fuzzgpu_core::needleman_wunsch(
             a,
             b,
@@ -524,7 +524,7 @@ fn needleman_wunsch_batch_fn(
 ) -> PyResult<Vec<i64>> {
     let refs = borrow_strs(candidates)?;
     let refs = str_refs(&refs)?;
-    py.allow_threads(|| {
+    py.detach(|| {
         Ok(fuzzgpu_core::needleman_wunsch_batch(
             query,
             &refs,
@@ -546,7 +546,7 @@ fn needleman_wunsch_affine(
     gap_open: i64,
     gap_extend: i64,
 ) -> PyResult<i64> {
-    py.allow_threads(|| {
+    py.detach(|| {
         Ok(fuzzgpu_core::needleman_wunsch_affine(
             a,
             b,
@@ -580,7 +580,7 @@ fn needleman_wunsch_affine_batch(
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::needleman::gpu_ext::GpuNeedlemanAffineKernel::get() {
                 let pairs: Vec<(&str, &str)> = refs.iter().map(|c| (query, *c)).collect();
-                match py.allow_threads(|| {
+                match py.detach(|| {
                     kernel.compute_batch(&pairs, match_score, mismatch_score, gap_open, gap_extend)
                 }) {
                     Ok(res) => return Ok(res),
@@ -600,7 +600,7 @@ fn needleman_wunsch_affine_batch(
             }
         }
     }
-    py.allow_threads(|| {
+    py.detach(|| {
         Ok(fuzzgpu_core::needleman_wunsch_affine_batch(
             query,
             &refs,
@@ -617,7 +617,7 @@ fn needleman_wunsch_affine_batch(
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, /)")]
 fn jaro_similarity(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::jaro(a, b)))
+    py.detach(|| Ok(fuzzgpu_core::jaro(a, b)))
 }
 
 #[pyfunction]
@@ -628,7 +628,7 @@ fn jaro_winkler_similarity(py: Python, a: &str, b: &str, p: f64) -> PyResult<f64
             "Prefix scaling parameter 'p' must be between 0.0 and 0.25",
         ));
     }
-    py.allow_threads(|| Ok(fuzzgpu_core::jaro_winkler(a, b, p)))
+    py.detach(|| Ok(fuzzgpu_core::jaro_winkler(a, b, p)))
 }
 
 /// Shared compute for `jaro_winkler_batch` / `..._into`.
@@ -643,7 +643,7 @@ fn jaro_batch_core(py: Python<'_>, query: &str, cands: &[&str], p: f64) -> PyRes
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get() {
                 let pairs: Vec<(&str, &str)> = cands.iter().map(|c| (query, *c)).collect();
-                match py.allow_threads(|| kernel.compute_batch(&pairs, p)) {
+                match py.detach(|| kernel.compute_batch(&pairs, p)) {
                     Ok(res) => return Ok(res),
                     Err(e) => {
                         if is_force_gpu() {
@@ -661,7 +661,7 @@ fn jaro_batch_core(py: Python<'_>, query: &str, cands: &[&str], p: f64) -> PyRes
             }
         }
     }
-    py.allow_threads(|| Ok(fuzzgpu_core::jaro_winkler_batch(query, cands, p)))
+    py.detach(|| Ok(fuzzgpu_core::jaro_winkler_batch(query, cands, p)))
 }
 
 #[pyfunction]
@@ -695,7 +695,7 @@ fn jaro_cdist_core(
     {
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::jaro::gpu_ext::GpuJaroKernel::get() {
-                match py.allow_threads(|| kernel.compute_matrix(refs_a, refs_b, p)) {
+                match py.detach(|| kernel.compute_matrix(refs_a, refs_b, p)) {
                     Ok(res) => return Ok(res),
                     Err(e) => {
                         if is_force_gpu() {
@@ -713,7 +713,7 @@ fn jaro_cdist_core(
             }
         }
     }
-    py.allow_threads(|| {
+    py.detach(|| {
         Ok(fuzzgpu_core::jaro::jaro_winkler_cdist_cpu(
             refs_a, refs_b, p,
         ))
@@ -793,13 +793,13 @@ fn jaro_winkler_cdist_into(
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::ratio_with_cutoff(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::ratio_with_cutoff(a, b, score_cutoff)))
 }
 
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_partial_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::partial_ratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::partial_ratio(a, b, score_cutoff)))
 }
 
 /// partial_ratio_alignment: returns rapidfuzz's ScoreAlignment shape
@@ -813,7 +813,7 @@ fn fuzz_partial_ratio_alignment(
     b: &str,
     score_cutoff: f64,
 ) -> PyResult<(f64, usize, usize, usize, usize)> {
-    py.allow_threads(|| {
+    py.detach(|| {
         let al = fuzzgpu_core::partial_ratio_alignment(a, b, score_cutoff);
         Ok((
             al.score,
@@ -828,25 +828,25 @@ fn fuzz_partial_ratio_alignment(
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_token_sort_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::token_sort_ratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::token_sort_ratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_token_set_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::token_set_ratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::token_set_ratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_token_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::token_ratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::token_ratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_wratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::wratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::wratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
@@ -854,7 +854,7 @@ fn fuzz_wratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64>
 fn fuzz_ratio_batch(py: Python, query: &str, candidates: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     let refs = borrow_strs(candidates)?;
     let refs = str_refs(&refs)?;
-    py.allow_threads(|| Ok(fuzzgpu_core::ratio_batch(query, &refs)))
+    py.detach(|| Ok(fuzzgpu_core::ratio_batch(query, &refs)))
 }
 
 #[pyfunction]
@@ -868,7 +868,7 @@ fn fuzz_extract(
 ) -> PyResult<Vec<(String, f64, usize)>> {
     let refs = borrow_strs(choices)?;
     let refs = str_refs(&refs)?;
-    py.allow_threads(|| Ok(fuzzgpu_core::extract(query, &refs, score_cutoff, limit)))
+    py.detach(|| Ok(fuzzgpu_core::extract(query, &refs, score_cutoff, limit)))
 }
 
 #[pyfunction]
@@ -881,7 +881,7 @@ fn fuzz_extract_one(
 ) -> PyResult<Option<(String, f64, usize)>> {
     let refs = borrow_strs(choices)?;
     let refs = str_refs(&refs)?;
-    py.allow_threads(|| Ok(fuzzgpu_core::extract_one(query, &refs, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::extract_one(query, &refs, score_cutoff)))
 }
 
 // ── Optimized algorithm variants ────────────────────────────
@@ -889,7 +889,7 @@ fn fuzz_extract_one(
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, /)")]
 fn levenshtein_myers(py: Python, a: &str, b: &str) -> PyResult<u32> {
-    py.allow_threads(|| {
+    py.detach(|| {
         if a.is_ascii() && b.is_ascii() {
             Ok(fuzzgpu_core::levenshtein_myers(a.as_bytes(), b.as_bytes()))
         } else {
@@ -908,7 +908,7 @@ fn needleman_wunsch_striped(
     mismatch_score: i64,
     gap_penalty: i64,
 ) -> PyResult<i64> {
-    py.allow_threads(|| {
+    py.detach(|| {
         if a.is_ascii() && b.is_ascii() {
             Ok(fuzzgpu_core::needleman_wunsch_striped(
                 a.as_bytes(),
@@ -932,7 +932,7 @@ fn needleman_wunsch_striped(
 #[pyfunction]
 #[pyo3(text_signature = "(a, b, /)")]
 fn jaro_optimized(py: Python, a: &str, b: &str) -> PyResult<f64> {
-    py.allow_threads(|| {
+    py.detach(|| {
         if a.is_ascii() && b.is_ascii() {
             Ok(fuzzgpu_core::jaro_optimized(a.as_bytes(), b.as_bytes()))
         } else {
@@ -946,25 +946,25 @@ fn jaro_optimized(py: Python, a: &str, b: &str) -> PyResult<f64> {
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_partial_token_sort_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::partial_token_sort_ratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::partial_token_sort_ratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_partial_token_set_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::partial_token_set_ratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::partial_token_set_ratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_partial_token_ratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::partial_token_ratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::partial_token_ratio(a, b, score_cutoff)))
 }
 
 #[pyfunction]
 #[pyo3(signature = (a, b, score_cutoff = 0.0), text_signature = "(a, b, score_cutoff=0.0, /)")]
 fn fuzz_qratio(py: Python, a: &str, b: &str, score_cutoff: f64) -> PyResult<f64> {
-    py.allow_threads(|| Ok(fuzzgpu_core::qratio(a, b, score_cutoff)))
+    py.detach(|| Ok(fuzzgpu_core::qratio(a, b, score_cutoff)))
 }
 
 // ── Control & Utilities ─────────────────────────────────────

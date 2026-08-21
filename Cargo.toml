@@ -6,4 +6,4 @@ resolver = "2"
 wgpu = "30.0"
 pollster = "0.4"
 bytemuck = { version = "1.14", features = ["derive"] }
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.29", features = ["extension-module"] }
