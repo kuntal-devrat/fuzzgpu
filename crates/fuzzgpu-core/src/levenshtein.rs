@@ -2040,8 +2040,9 @@ pub mod gpu_ext {
             };
             // Force GPU dispatch: below the auto threshold the fault is never
             // exercised because the batch routes to CPU before reaching the GPU
-            // readback path.
-            GpuEngine::set_gpu_threshold(Some(1));
+            // readback path. The RAII guard holds the threshold lock, so no
+            // concurrent test can steal or reset the override mid-dispatch.
+            let _force = crate::gpu::force_gpu_threshold(1);
 
             let a = gen_strings(1000, 0xABCDEF01);
             let b = gen_strings(1000, 0x23456789);
@@ -2054,7 +2055,6 @@ pub mod gpu_ext {
             crate::gpu::arm_readback_timeout_fault();
             let result = kernel.compute(&pairs);
             crate::gpu::disarm_readback_timeout_fault();
-            GpuEngine::set_gpu_threshold(None);
 
             match result {
                 Err(FuzzGpuError::Timeout(_)) => {} // expected
@@ -2070,7 +2070,7 @@ pub mod gpu_ext {
             let Some(kernel) = gpu_kernel_or_skip() else {
                 return;
             };
-            GpuEngine::set_gpu_threshold(Some(1));
+            let _force = crate::gpu::force_gpu_threshold(1);
 
             let a = gen_strings(30, 0x11111111);
             let b = gen_strings(30, 0x22222222);
@@ -2080,7 +2080,6 @@ pub mod gpu_ext {
             crate::gpu::arm_readback_timeout_fault();
             let result = kernel.compute_matrix(&refs_a, &refs_b);
             crate::gpu::disarm_readback_timeout_fault();
-            GpuEngine::set_gpu_threshold(None);
 
             match result {
                 Err(FuzzGpuError::Timeout(_)) => {} // expected
@@ -2097,7 +2096,7 @@ pub mod gpu_ext {
             let Some(kernel) = gpu_kernel_or_skip() else {
                 return;
             };
-            GpuEngine::set_gpu_threshold(Some(1));
+            let _force = crate::gpu::force_gpu_threshold(1);
 
             let a = gen_strings(1000, 0x0BADF00D);
             let b = gen_strings(1000, 0xF00DBABE);
@@ -2110,7 +2109,6 @@ pub mod gpu_ext {
             crate::gpu::arm_small_buffer_fault();
             let result = kernel.compute(&pairs);
             crate::gpu::disarm_small_buffer_fault();
-            GpuEngine::set_gpu_threshold(None);
 
             match result {
                 Err(FuzzGpuError::BufferError(_)) => {} // expected

@@ -1485,7 +1485,6 @@ mod tests {
     #[cfg(feature = "gpu")]
     mod gpu_tests {
         use super::*;
-        use crate::gpu::GpuEngine;
         use crate::needleman::gpu_ext::GpuNeedlemanAffineKernel;
 
         fn gpu_kernel_or_skip() -> Option<&'static GpuNeedlemanAffineKernel> {
@@ -1532,7 +1531,9 @@ mod tests {
             let Some(kernel) = gpu_kernel_or_skip() else {
                 return;
             };
-            GpuEngine::set_gpu_threshold(Some(1));
+            // RAII: holds the threshold lock so no concurrent test can steal
+            // the override, and restores `None` on drop.
+            let _force = crate::gpu::force_gpu_threshold(1);
 
             let mut state: u64 = 0xDEAD_CAFE;
             let mut pairs: Vec<(String, String)> = Vec::with_capacity(500);
@@ -1567,7 +1568,6 @@ mod tests {
                 .map(|(a, b)| needleman_wunsch_affine(a, b, 2, -1, -3, -1))
                 .collect();
             assert_eq!(gpu, cpu, "GPU NW must match CPU for normal scoring range");
-            GpuEngine::set_gpu_threshold(None);
         }
     }
 }

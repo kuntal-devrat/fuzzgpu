@@ -2,10 +2,12 @@
 # the fix ships in a crates.io release, uncomment and set the correct paths:
 #
 # [patch.crates-io]
-# wgpu       = { path = "../../wgpu/wgpu" }
-# wgpu-core  = { path = "../../wgpu/wgpu-core" }
-# wgpu-hal   = { path = "../../wgpu/wgpu-hal" }
-# wgpu-types = { path = "../../wgpu/wgpu-types" }
+# wgpu       = { path = "D:/wgpu/wgpu" }
+# wgpu-core  = { path = "D:/wgpu/wgpu-core" }
+# wgpu-hal   = { path = "D:/wgpu/wgpu-hal" }
+# wgpu-types = { path = "D:/wgpu/wgpu-types" }
 #
-# Once the fix is merged and released, bump `wgpu = "X.Y"` in
-# Cargo.toml and remove the patch section entirely.
+# NOTE: the object-naming experiment (FUZZGPU_DISABLE_OBJECT_NAMING gate in
+# D:\wgpu\wgpu-hal\src\vulkan\device.rs) is PAUSED — the #10085 crash stopped
+# reproducing on this machine for all configurations after ~6 captures.
+# To resume: enable this patch, rebuild, and run the 32-thread stress.

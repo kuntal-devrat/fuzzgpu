@@ -1,6 +1,6 @@
 [package]
 name = "fuzzgpu-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "GPU-accelerated fuzzy string matching engine"
 license = "MIT"

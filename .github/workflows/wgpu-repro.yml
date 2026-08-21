@@ -1,11 +1,11 @@
 name: wgpu repro (lavapipe)
 
-# Diagnostic workflow for the wgpu parallel-dispatch crash (heap corruption /
-# segfault under >=3 concurrent dispatchers on a shared device — Intel Iris Xe,
-# gfx-rs/wgpu#10085). Runs the minimal reproducer on a SOFTWARE Vulkan adapter
-# (Mesa lavapipe), which needs no GPU hardware, and uploads the evidence
-# (full log, outcome, environment, reproducer source) so it can be attached to
-# the upstream issue.
+# Diagnostic workflow for the wgpu parallel-dispatch crash (Vulkan loader
+# use-after-free in vkSetDebugUtilsObjectNameEXT under concurrent dispatch
+# — Intel Iris Xe, gfx-rs/wgpu#10085). Runs the minimal reproducer on a
+# SOFTWARE Vulkan adapter (Mesa lavapipe), which needs no GPU hardware, and
+# uploads the evidence (full log, outcome, environment, reproducer source)
+# so it can be attached to the upstream issue.
 #
 # Manual trigger (workflow_dispatch). A red job = crash reproduced; green =
 # no crash in the requested number of runs. Both outcomes are useful evidence.
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Reproducer to run: "minimal" = repro/wgpu-parallel-crash, "lockless-suite" = fuzzgpu GPU tests with the dispatch-serialization workaround bypassed'
+        description: 'Reproducer to run: "minimal" = repro/wgpu-parallel-crash, "lockless-suite" = fuzzgpu GPU tests with concurrent dispatch (serialization workaround removed)'
         type: choice
         options: [minimal, lockless-suite]
         default: minimal
@@ -62,13 +62,14 @@ jobs:
           set +e
           cd "$GITHUB_WORKSPACE"
           if [ "$MODE" = "lockless-suite" ]; then
-            # The fuzzgpu GPU test suite with its dispatch-serialization
-            # workaround bypassed — this is what reproduces on Intel hardware.
+            # The fuzzgpu GPU test suite — dispatch is fully concurrent by
+            # default (the serialization workaround was removed; setting
+            # FUZZGPU_SKIP_DISPATCH_LOCK=1 now *enables* serialization).
             cargo test -p fuzzgpu-core --lib --no-run > /dev/null 2>&1 || { echo "suite build failed" > outcome.txt; exit 1; }
             BIN=$(ls -t target/debug/deps/fuzzgpu_core-* 2>/dev/null | grep -v '\.d$' | head -1)
             [ -n "$BIN" ] || { echo "no test binary found" > outcome.txt; exit 1; }
             for i in $(seq 1 "$RUNS"); do
-              FUZZGPU_SKIP_DISPATCH_LOCK=1 FUZZGPU_REQUIRE_GPU=1 "$BIN" gpu --test-threads="$THREADS" > run.log 2>&1
+              FUZZGPU_REQUIRE_GPU=1 "$BIN" gpu --test-threads="$THREADS" > run.log 2>&1
               code=$?
               if [ $code -ne 0 ]; then
                 echo "REPRODUCED: crash at run $i/$RUNS (exit $code) — see run.log"

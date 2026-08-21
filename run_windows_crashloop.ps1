@@ -1,4 +1,7 @@
-# Windows lockless crash loop — reproduces gfx-rs/wgpu#10085
+# Windows concurrent crash loop — the fuzzgpu suite with fully concurrent GPU
+# dispatch (the serialization workaround was removed; FUZZGPU_SKIP_DISPATCH_LOCK
+# is now an opt-in safety valve that *enables* serialization, so it is NOT set
+# here).
 # Distinguishes wgpu hard crashes from Rust test-isolation panics.
 param(
     [int]$Runs    = 150,
@@ -16,10 +19,8 @@ if (-not $BIN) {
 
 Write-Host "Binary : $BIN"
 Write-Host "Runs   : $Runs   Threads: $Threads"
-Write-Host "wgpu   : patched (fix/queue-drop-drain-loop)"
+Write-Host "wgpu   : stock (concurrent dispatch)"
 Write-Host ""
-
-$env:FUZZGPU_SKIP_DISPATCH_LOCK = "1"
 
 $ok = 0; $rustPanic = 0; $heapCorrupt = 0; $accessViol = 0; $otherCrash = 0
 

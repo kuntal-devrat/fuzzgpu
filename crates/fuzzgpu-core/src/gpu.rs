@@ -25,25 +25,23 @@ pub fn require_gpu() -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the dispatch-serialization workaround is bypassed. Shared by the
-/// test-only lock below and the production [`GpuEngine::dispatch_lock`] so
-/// `FUZZGPU_SKIP_DISPATCH_LOCK=1` disables BOTH — the repro harness needs the
-/// bypass to reproduce upstream gfx-rs/wgpu#10085 under real concurrency.
-pub(crate) fn dispatch_lock_bypass() -> bool {
+/// Opt-in dispatch serialization (safety valve). `FUZZGPU_SKIP_DISPATCH_LOCK=1`
+/// re-enables the GPU-dispatch serialization that used to be the default
+/// workaround for the rare gfx-rs/wgpu#10085 crash class (heap corruption on
+/// Intel D3D12 under >=3 concurrent dispatchers on a shared device). Dispatch
+/// is fully concurrent by default; set this env var on affected Intel hardware
+/// to serialize both the production dispatch path and the test suite.
+pub(crate) fn dispatch_serialize() -> bool {
     std::env::var("FUZZGPU_SKIP_DISPATCH_LOCK")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
 
-/// Serialize GPU access across tests. This is a workaround for a wgpu/driver
-/// crash on Intel Iris Xe under >=3 concurrent dispatchers on the shared
-/// device (heap corruption on DX12, segfault on Vulkan) — see
-/// `repro/wgpu-parallel-crash` and upstream gfx-rs/wgpu#10085.
-///
-/// Setting `FUZZGPU_SKIP_DISPATCH_LOCK=1` bypasses the workaround so the
-/// underlying crash can be reproduced / bisected in CI or locally.
+/// Serialize GPU access across tests. Only active when
+/// `FUZZGPU_SKIP_DISPATCH_LOCK=1` (opt-in safety valve); by default returns
+/// `None` so the test suite runs with fully concurrent GPU dispatch.
 pub fn gpu_test_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
-    if dispatch_lock_bypass() {
+    if !dispatch_serialize() {
         return None;
     }
     Some(
@@ -99,21 +97,10 @@ pub(crate) fn effective_shader_source(real: &'static str) -> std::borrow::Cow<'s
     std::borrow::Cow::Borrowed(real)
 }
 
-/// Serialize GPU access across tests.
-///
-/// This is a workaround for a `wgpu-core` bug (`Queue::drop` spurious
-/// `assert!(queue_empty)` panic under concurrent dispatch) filed as
-/// gfx-rs/wgpu#10085. The fix is in branch `fix/queue-drop-drain-loop`
-/// (PR pending merge into `gfx-rs/wgpu`).
-///
-/// **Removal plan:** once the wgpu fix ships in a released version and
-/// `fuzzgpu` bumps its dependency to that version, remove:
-/// - This lock and its static
-/// - `dispatch_lock_bypass()` and `FUZZGPU_SKIP_DISPATCH_LOCK` support
-/// - `GpuEngine::dispatch_lock` field and `dispatch_lock()` method
-///
-/// Setting `FUZZGPU_SKIP_DISPATCH_LOCK=1` bypasses the workaround so the
-/// underlying crash can be reproduced / bisected in CI or locally.
+/// Test-suite dispatch serialization, active only when
+/// `FUZZGPU_SKIP_DISPATCH_LOCK=1` (opt-in safety valve for the rare
+/// gfx-rs/wgpu#10085 crash class on Intel D3D12). By default the suite runs
+/// with fully concurrent GPU dispatch.
 pub static GPU_TEST_DISPATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Serializes tests that mutate `GPU_THRESHOLD_OVERRIDE`.
@@ -236,13 +223,11 @@ pub struct GpuEngine {
     pub info: GpuInfo,
     pub max_buffer_size: u64,
     pub max_storage_buffer_binding_size: u32,
-    /// Serializes GPU dispatch across threads. The upstream wgpu/driver crash
-    /// (gfx-rs/wgpu#10085) triggers under >=3 concurrent dispatchers on the
-    /// shared device (Intel iGPUs, DX12/Vulkan) — e.g. two Python threads
-    /// calling the GIL-releasing GPU bindings simultaneously. Every public GPU
+    /// Opt-in dispatch serialization (safety valve for the rare
+    /// gfx-rs/wgpu#10085 crash class on Intel D3D12). By default dispatch is
+    /// fully concurrent; when `FUZZGPU_SKIP_DISPATCH_LOCK=1` every public GPU
     /// entry point holds this lock for the duration of its dispatch + readback,
-    /// so at most one submission is ever in flight. `FUZZGPU_SKIP_DISPATCH_LOCK`
-    /// bypasses it (repro harness only).
+    /// so at most one submission is ever in flight.
     dispatch_lock: std::sync::Mutex<()>,
 }
 
@@ -533,11 +518,11 @@ impl GpuEngine {
         Ok(bytes)
     }
 
-    /// Take the production dispatch lock (see the field doc). Returns `None`
-    /// when `FUZZGPU_SKIP_DISPATCH_LOCK` is set so the repro harness can
-    /// reproduce upstream #10085 under real concurrency.
+    /// Take the opt-in dispatch serialization lock (see the field doc).
+    /// Returns `None` unless `FUZZGPU_SKIP_DISPATCH_LOCK=1` is set — dispatch
+    /// is fully concurrent by default.
     pub(crate) fn dispatch_lock(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
-        if dispatch_lock_bypass() {
+        if !dispatch_serialize() {
             return None;
         }
         Some(self.dispatch_lock.lock().unwrap_or_else(|e| e.into_inner()))
@@ -722,13 +707,16 @@ mod tests {
 
     /// `set_gpu_threshold` must override the auto value and be resettable to
     /// auto (`None`) at runtime (a `Mutex`, not a one-shot `OnceLock`). The
-    /// override is global, so this test holds the GPU test lock — serializing
-    /// it against every other GPU test, which would otherwise see the
-    /// temporary override (e.g. a 1000-pair fault-injection test routed to
-    /// CPU instead of dispatching) — and restores `None` before returning.
+    /// override is global, so this test holds `GPU_THRESHOLD_TEST_LOCK` —
+    /// excluding every other test that mutates or force-reads the override
+    /// (fault-injection tests route to CPU instead of dispatching when a
+    /// concurrent test steals the override mid-flight) — and restores `None`
+    /// before returning.
     #[test]
     fn test_set_gpu_threshold_override_and_reset() {
-        let _gpu_guard = gpu_test_lock();
+        let _thr = GPU_THRESHOLD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         GpuEngine::set_gpu_threshold(Some(1234));
         assert_eq!(GpuEngine::gpu_threshold_override(), Some(1234));
         if let Ok(engine) = GpuEngine::get() {
@@ -808,12 +796,20 @@ mod tests {
         disarm_shader_error_fault();
     }
 
-    /// dispatch_lock_bypass must read FUZZGPU_SKIP_DISPATCH_LOCK and return
-    /// true only when it is set to '1' or 'true' (case-insensitive).
+    /// dispatch_serialize must read FUZZGPU_SKIP_DISPATCH_LOCK and return
+    /// true only when it is set to '1' or 'true' (case-insensitive). The
+    /// serialization is opt-in: unset (default) means fully concurrent.
     #[test]
-    fn test_dispatch_lock_bypass_default_is_false() {
+    fn test_dispatch_serialize_opt_in() {
         std::env::remove_var("FUZZGPU_SKIP_DISPATCH_LOCK");
-        assert!(!dispatch_lock_bypass());
+        assert!(!dispatch_serialize());
+        std::env::set_var("FUZZGPU_SKIP_DISPATCH_LOCK", "1");
+        assert!(dispatch_serialize());
+        std::env::set_var("FUZZGPU_SKIP_DISPATCH_LOCK", "true");
+        assert!(dispatch_serialize());
+        std::env::set_var("FUZZGPU_SKIP_DISPATCH_LOCK", "0");
+        assert!(!dispatch_serialize());
+        std::env::remove_var("FUZZGPU_SKIP_DISPATCH_LOCK");
     }
 
     /// force_gpu_threshold sets the override and its Drop resets to None.

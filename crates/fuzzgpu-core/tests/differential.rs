@@ -532,17 +532,27 @@ mod gpu_differential {
     use fuzzgpu_core::needleman::gpu_ext::GpuNeedlemanAffineKernel;
     use std::sync::{Mutex, MutexGuard};
 
-    /// Serializes GPU access across the differential tests. The lib suite's
-    /// equivalent (`gpu::GPU_TEST_DISPATCH_LOCK`) is `#[cfg(test)]`-only and
-    /// invisible to integration tests, so this is a local copy — the same
-    /// workaround for the same wgpu/driver crash (gfx-rs/wgpu#10085) observed
-    /// under >=3 concurrent dispatchers on the shared device (Intel Iris Xe).
+    /// Opt-in GPU serialization across the differential tests, mirroring the
+    /// lib's contract: fully concurrent by default; when
+    /// `FUZZGPU_SKIP_DISPATCH_LOCK=1` (opt-in safety valve for the rare
+    /// gfx-rs/wgpu#10085 crash class) the lock serializes dispatch.
     static GPU_TEST_DISPATCH_LOCK: Mutex<()> = Mutex::new(());
 
-    fn gpu_test_lock() -> MutexGuard<'static, ()> {
-        GPU_TEST_DISPATCH_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+    fn dispatch_serialize() -> bool {
+        std::env::var("FUZZGPU_SKIP_DISPATCH_LOCK")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    fn gpu_test_lock() -> Option<MutexGuard<'static, ()>> {
+        if !dispatch_serialize() {
+            return None;
+        }
+        Some(
+            GPU_TEST_DISPATCH_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        )
     }
 
     /// When `FUZZGPU_REQUIRE_GPU` is set (CI with a software Vulkan adapter),
