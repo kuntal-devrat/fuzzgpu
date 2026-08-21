@@ -21,10 +21,11 @@ allow = [
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 version = 2
-# pyo3 0.23.5 has two advisories (RUSTSEC-2025-0026, RUSTSEC-2026-0177)
-# that require upgrading to pyo3 >= 0.29 — a breaking API change that also
-# requires numpy 0.29. Ignoring until the major-version bump lands.
+# pyo3 0.23.5 has multiple advisories that require upgrading to pyo3 >= 0.29 —
+# a breaking API change that also requires numpy 0.29. Ignoring until the
+# major-version bump lands.
 ignore = [
+    "RUSTSEC-2025-0020",
     "RUSTSEC-2025-0026",
     "RUSTSEC-2026-0177",
 ]

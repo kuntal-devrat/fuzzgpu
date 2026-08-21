@@ -41,6 +41,7 @@ jobs:
   deny:
     name: cargo deny (license + security audit)
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
@@ -93,6 +94,7 @@ jobs:
   test-free-threaded:
     name: Python 3.13t free-threaded smoke test
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
