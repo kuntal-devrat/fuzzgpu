@@ -85,18 +85,17 @@ jobs:
       - name: Run Python Test Suite
         run: pytest tests -v
 
-  # ── Python 3.13 free-threaded build ─────────────────────────────────────────
+  # ── Python 3.14 free-threaded build ─────────────────────────────────────────
   test-free-threaded:
-    name: Python 3.13t free-threaded smoke test
+    name: Python 3.14t free-threaded smoke test
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.13t (free-threaded)
+      - name: Set up Python 3.14t (free-threaded)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13t'
+          python-version: '3.14t'
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -283,12 +282,11 @@ jobs:
 
   # ── Nightly deep-fuzz tier ────────────────────────────────────────────────────
   differential-nightly:
-    # Nightly-only deep-fuzz tier. Gated so it never runs on push/PR (where
-    # differential-deep at 64 cases already gates the GPU paths); on a schedule
-    # trigger the workflow_dispatch inputs fall back to their defaults, so this
-    # runs at 256 cases unless manually dispatched with a custom count.
-    name: Differential proptests nightly (${{ inputs.differential-cases }} cases)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Deep-fuzz tier. Runs on push at 64 cases (same as differential-deep),
+    # on schedule at 256 cases (4x), or at a custom count via workflow_dispatch.
+    # The `||` fallback handles push-trigger runs where workflow_dispatch
+    # inputs are undefined.
+    name: Differential proptests nightly (${{ github.event_name == 'push' && 64 || inputs.differential-cases || 256 }} cases)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -305,14 +303,14 @@ jobs:
         run: |
           vulkaninfo --summary | grep -iE 'lava|llvmpipe' || { echo "lavapipe not found"; exit 1; }
 
-      # Nightly deep-fuzz tier: 256 cases (4x the push-time 64, 25.6x the
-      # default 10). The GPU differentials follow PROPTEST_CASES, so this
-      # deep-fuzzes the whole harness — CPU differentials and GPU-vs-oracle
-      # alike — on the software adapter. Catches rare regressions that a
-      # 10-case push run would miss.
-      - name: Run differential suite at ${{ inputs.differential-cases }} cases
+      # Deep-fuzz tier: 64 cases on push (matches differential-deep), 256 on
+      # schedule (4x), or custom via workflow_dispatch. The GPU differentials
+      # follow PROPTEST_CASES, so this deep-fuzzes the whole harness — CPU
+      # differentials and GPU-vs-oracle alike — on the software adapter.
+      # Catches rare regressions that a 10-case push run would miss.
+      - name: Run differential suite at ${{ github.event_name == 'push' && 64 || inputs.differential-cases || 256 }} cases
         env:
-          PROPTEST_CASES: ${{ inputs.differential-cases }}
+          PROPTEST_CASES: ${{ github.event_name == 'push' && 64 || inputs.differential-cases || 256 }}
           FUZZGPU_REQUIRE_GPU: '1'
           WGPU_BACKEND: vulkan
         run: cargo test -p fuzzgpu-core --test differential
@@ -458,6 +456,7 @@ jobs:
       - gpu-differential
       - gpu-stress
       - differential-deep
+      - differential-nightly
       - wasm-tests
       - wasm-build
       - wasm-python-differential
