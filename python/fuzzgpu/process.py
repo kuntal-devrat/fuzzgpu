@@ -105,6 +105,16 @@ def extract(
             scorer_kwargs=scorer_kwargs,
         )
     )
+    if limit is not None and limit < len(results):
+        # Partial top-k instead of a full sort when the caller only needs a
+        # small slice (heapq.nlargest/nsmallest are documented equivalent to
+        # sorted(...)[:limit], so tie/order semantics are unchanged).
+        import heapq
+
+        def _key(item):
+            return item[1]
+
+        return heapq.nsmallest(limit, results, key=_key) if distance else heapq.nlargest(limit, results, key=_key)
     results.sort(key=lambda item: item[1], reverse=not distance)
     return results if limit is None else results[:limit]
 
@@ -181,22 +191,22 @@ def cdist(
     # behaviour for `workers`: Rayon uses all cores inside each row call, so
     # `workers` is ignored at the Python level (it would just add Python thread
     # overhead on top of Rayon's own parallelism).
-    if (
-        _is_native_ratio(scorer)
-        and processor is None
-        and not scorer_kwargs
-        and score_multiplier == 1
-    ):
+    if _is_native_ratio(scorer) and processor is None and not scorer_kwargs:
         try:
             from . import fuzzgpu as _native
             matrix: list[list[float]] = [
                 _native.fuzz_ratio_batch(q, choices) for q in queries
             ]
+            # Cutoff applies to the raw score (matching the generic path, where
+            # the scorer evaluates it before scaling); the multiplier scales the
+            # final value.
             if score_cutoff is not None:
                 matrix = [
                     [v if v >= score_cutoff else 0.0 for v in row]
                     for row in matrix
                 ]
+            if score_multiplier != 1:
+                matrix = [[v * score_multiplier for v in row] for row in matrix]
             if dtype is not None:
                 try:
                     import numpy as np
@@ -226,6 +236,17 @@ def cdist(
         if count == 1
         else list(ThreadPoolExecutor(max_workers=count).map(row, queries))
     )
+
+    # Consistency with the fast path and rapidfuzz: when the scorer does not
+    # accept score_cutoff itself, similarity scores below the cutoff are zeroed
+    # post-hoc (distance scorers keep raw values — the cutoff was already
+    # handled inside _score for scorers that support it).
+    if (
+        score_cutoff is not None
+        and not _is_distance_scorer(scorer)
+        and not _accepts(scorer, "score_cutoff")
+    ):
+        matrix = [[v if v >= score_cutoff else 0.0 for v in row] for row in matrix]
 
     if dtype is not None:
         try:

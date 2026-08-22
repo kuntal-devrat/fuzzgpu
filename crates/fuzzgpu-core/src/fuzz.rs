@@ -618,20 +618,27 @@ pub fn wratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
         len2 as f64 / len1 as f64
     };
 
-    let mut end_ratio = ratio_with_cutoff(s1, s2, score_cutoff);
+    // rapidfuzz threads the *mutated* cutoff forward: each step rescales the
+    // running cutoff (already divided by the previous step's scale) by its own
+    // scale factor, so a low end_ratio at a high user cutoff escalates the
+    // effective cutoff past 100 and suppresses the token/partial-token terms.
+    // Reusing the original score_cutoff at every step instead let those terms
+    // leak through (WRatio score_cutoff parity).
+    let mut cutoff = score_cutoff;
+    let mut end_ratio = ratio_with_cutoff(s1, s2, cutoff);
 
     if len_ratio < 1.5 {
-        let c = score_cutoff.max(end_ratio) / UNBASE_SCALE;
-        return end_ratio.max(token_ratio(s1, s2, c) * UNBASE_SCALE);
+        cutoff = cutoff.max(end_ratio) / UNBASE_SCALE;
+        return end_ratio.max(token_ratio(s1, s2, cutoff) * UNBASE_SCALE);
     }
 
     let partial_scale = if len_ratio <= 8.0 { 0.9 } else { 0.6 };
 
-    let c = score_cutoff.max(end_ratio) / partial_scale;
-    end_ratio = end_ratio.max(partial_ratio(s1, s2, c) * partial_scale);
+    cutoff = cutoff.max(end_ratio) / partial_scale;
+    end_ratio = end_ratio.max(partial_ratio(s1, s2, cutoff) * partial_scale);
 
-    let c = score_cutoff.max(end_ratio) / UNBASE_SCALE;
-    end_ratio.max(partial_token_ratio(s1, s2, c) * UNBASE_SCALE * partial_scale)
+    cutoff = cutoff.max(end_ratio) / UNBASE_SCALE;
+    end_ratio.max(partial_token_ratio(s1, s2, cutoff) * UNBASE_SCALE * partial_scale)
 }
 
 /// QRatio: rapidfuzz's quick ratio — 0 for empty inputs (FuzzyWuzzy
@@ -647,12 +654,8 @@ pub fn qratio(s1: &str, s2: &str, score_cutoff: f64) -> f64 {
 /// Uses the shared-query Myers SIMD fast path when the query is ASCII ≤ 64 bytes
 /// and all candidates are ASCII — same acceleration as `levenshtein_batch_auto`.
 pub fn ratio_batch(query: &str, candidates: &[&str]) -> Vec<f64> {
-    // The indel model (substitution cost=2) does not have a direct Myers
-    // bit-vector path — Myers gives edit distance with unit substitution cost.
-    // We approximate with the standard Levenshtein batch and then convert:
-    //   indel_dist = 2 * lev_dist when lev path only uses ins/del (no subs).
-    // For general strings we fall back to the per-pair indel_distance.
-    // The Rayon parallel path is correct for all inputs.
+    // Per-pair ratio over Rayon; each pair takes the ASCII Myers / char-DP
+    // fast paths inside indel_distance.
     candidates.par_iter().map(|c| ratio(query, c)).collect()
 }
 
@@ -1153,5 +1156,18 @@ mod tests {
         // len_ratio < 1.5 → token_ratio branch
         let r = wratio("new york mets", "new york", 0.0);
         assert!((0.0..=100.0).contains(&r));
+    }
+
+    #[test]
+    fn test_wratio_cutoff_threads_rescaled_cutoff() {
+        // rapidfuzz WRatio rescales the running cutoff at each step, so a high
+        // user cutoff suppresses the token terms even when a perfect substring
+        // exists. Regression: fuzzgpu returned 57.0/85.5 where rapidfuzz
+        // returns 0.0 for these inputs.
+        assert_eq!(wratio("new york yankees", "a", 90.0), 0.0);
+        assert_eq!(wratio("a", "ab", 95.0), 0.0);
+        assert_eq!(wratio("hello world", "world", 95.0), 0.0);
+        // The cutoff=0 path is unaffected: the unscaled partial ratio still wins.
+        assert!((wratio("new york yankees", "a", 0.0) - 60.0).abs() < 1e-9);
     }
 }

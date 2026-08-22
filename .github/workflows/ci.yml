@@ -442,6 +442,31 @@ jobs:
       - name: Compare against Python bindings
         run: python tests/wasm_python_differential.py target/wasm-diff-check/results.json
 
+  # ── CPU-only wheel (no default features) ──────────────────────────────────
+  # Most users on machines without a GPU still get the full-featured wheel; this
+  # job builds the CPU-only variant (`--no-default-features` drops the `gpu`
+  # feature; `[tool.maturin] features` keeps pyo3/extension-module) and attaches
+  # it to releases for GPU-free installs.
+  wheel-cpu-only:
+    name: CPU-only wheel (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build CPU-only wheel
+        run: pip install maturin && maturin build --release --no-default-features -o dist-cpu
+      - name: Smoke-test the CPU-only wheel
+        run: |
+          pip install --force-reinstall dist-cpu/*.whl
+          python -c "import fuzzgpu; assert not fuzzgpu.is_gpu_available(); assert fuzzgpu.fuzz.ratio('hello', 'hallo') == 80.0; assert fuzzgpu.levenshtein('kitten', 'sitting') == 3"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fuzzgpu-cpu-wheel
+          path: dist-cpu/
+
   # ── Release gate: all required jobs must pass ─────────────────────────────────
   ci-gate:
     name: CI Gate (all required jobs pass)
@@ -460,6 +485,7 @@ jobs:
       - wasm-tests
       - wasm-build
       - wasm-python-differential
+      - wheel-cpu-only
       - plain-build
       - docs
     steps:

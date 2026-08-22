@@ -112,7 +112,11 @@ pub fn needleman_wunsch_batch(
         .collect()
 }
 
-const NEG_INF: i64 = -1_000_000_000_000_000_000;
+// Finite sentinel for impossible Gotoh states (Ix/Iy with no preceding
+// character). i64::MIN/4 — the same safety margin rapidfuzz uses — stays
+// below every representable real score; the previous -1e18 could be beaten
+// by valid all-gap paths once gap penalties exceed ~1e17.
+const NEG_INF: i64 = i64::MIN / 4;
 
 /// Needleman-Wunsch global alignment score with affine gap penalties (Gotoh 1982 algorithm).
 ///

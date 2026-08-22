@@ -9,7 +9,7 @@
 *Cross-platform GPU compute via WebGPU (`wgpu`) & Multi-Core CPU parallelism with Rayon. Zero CUDA dependencies.*
 
 [![PyPI 
-Version](https://img.shields.io/badge/pypi-v0.3.0-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
+Version](https://img.shields.io/badge/pypi-v0.4.0-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg?style=flat-square)](https://www.rust-lang.org)
 [![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
@@ -32,7 +32,24 @@ No NVIDIA CUDA drivers or complex toolkits required.
 
 ---
 
-## What's New in v0.3.0
+## What's New in v0.4.0
+
+### Production hardening
+- **WRatio score_cutoff parity** — WRatio now threads a rescaled running cutoff through its token/partial-token steps exactly as rapidfuzz does; high cutoffs no longer leak scaled token ratios (verified against rapidfuzz 3.14.5).
+- **`process.cdist` correctness** — the generic path now zeroes below-cutoff scores for scorers without `score_cutoff` support, and the fast path honors `score_multiplier` (cutoff is applied to the raw score, then scaled) — matching rapidfuzz.
+- **Randomized rapidfuzz differential suite** — new `tests/test_rapidfuzz_differential.py` pins every scorer, cutoff, alignment, distance module, editops, and `process` helper to rapidfuzz 3.14.5 across a seeded 200-pair corpus (runs on every push).
+- **Gotoh sentinel** — `NEG_INF` hardened to `i64::MIN/4` so pathological gap penalties can no longer beat it.
+- **CPU-only wheel** — `maturin build --no-default-features` now ships a GPU-free variant, built and smoke-tested in CI.
+- **Flaky stress asserts gated** — wall-clock budgets in `test_stress.py` are disabled via `FUZZGPU_SKIP_PERF_ASSERTS=1` (correctness checks always run).
+- **Accurate GPU timeout message** — readback timeouts now report the actual configured timeout.
+
+### Includes all v0.3.0 fixes
+All fixes from v0.3.0 are included.
+
+---
+
+<details>
+<summary><b>Previous (v0.3.0)</b></summary>
 
 ### Production hardening
 - **Kernel `get()` panics eliminated** — all four GPU kernels (`GpuLevenshteinKernel`,
@@ -136,15 +153,14 @@ The full Python layer is now byte-identical to rapidfuzz 3.14.5 over a 169,744-p
 ## Benchmark Results
 
 *Hardware: Intel(R) Iris(R) Xe Graphics — integrated GPU (Vulkan) + Intel Core i7 (Rayon, all cores)*
-*Versions: fuzzgpu 0.3.0 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
+*Versions: fuzzgpu 0.4.0 · rapidfuzz 3.14.5 · python-Levenshtein 0.27.4*
 *Median of 7 runs after warmup. Reproduce: `python benchmarks/bench_compare.py`*
 
 > **GPU class note:** These numbers are from an **integrated GPU** (iGPU), which shares memory
 > bandwidth with the CPU and has a ~1 ms dispatch round-trip. On a **discrete GPU** (dGPU) the
 > GPU columns improve significantly — expect 3–10× better GPU throughput and GPU routing kicking
 > in at much smaller batch sizes (threshold drops from ~500 pairs to ~64 pairs automatically).
-> Concurrency gains (multiple Python threads, after the wgpu fix ships) add a further 2–4×
-> on top for server workloads regardless of GPU class.
+> Concurrent Python-thread dispatch is supported on all backends.
 
 ### Levenshtein Batch (1 query × N candidates, 10-char strings)
 | Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
@@ -162,7 +178,9 @@ The full Python layer is now byte-identical to rapidfuzz 3.14.5 over a 169,744-p
 | **10,000** | 1.39 ms | 1.49 ms | 9.93 ms | 7.14× | 6.67× |
 | **50,000** | 10.19 ms | 9.91 ms | 66.57 ms | 6.54× | 6.72× |
 
-> **Note:** rapidfuzz's `DamerauLevenshtein` uses Optimal String Alignment (OSA). fuzzgpu implements the **unrestricted** Lowrance-Wagner (1975) algorithm which allows non-adjacent transpositions. For example: `damerau("ca", "abc") == 2` (fuzzgpu) vs `3` (rapidfuzz OSA). Use `fuzzgpu.distance.OSA` for OSA-compatible semantics.
+> **Note:** Both fuzzgpu and rapidfuzz's `DamerauLevenshtein` implement the **unrestricted**
+> Lowrance-Wagner (1975) algorithm (non-adjacent transpositions allowed): `damerau("ca", "abc") == 2`
+> in both. For the restricted variant use `fuzzgpu.distance.OSA` (`== 3`, also matching rapidfuzz).
 
 ### Jaro-Winkler Batch (p = 0.1)
 | Batch Size | `fuzzgpu` (GPU) | `fuzzgpu` (CPU) | `rapidfuzz` | vs RF (GPU) | vs RF (CPU) |
@@ -201,7 +219,7 @@ pip install fuzzgpu
 ```toml
 # Rust
 [dependencies]
-fuzzgpu-core = "0.3.0"
+fuzzgpu-core = "0.4.0"
 ```
 
 ---
@@ -249,8 +267,8 @@ from fuzzgpu.fuzz import (
 
 ratio("fuzzy was a bear", "fuzzy was a bear")           # 100.0
 partial_ratio("hello", "oh hello there")               # 100.0
-score, src, dst, length = partial_ratio_alignment("hello", "oh hello there")
-# (100.0, 0, 3, 5)  ← window starts at char 3 of the longer string
+score, src, dst = partial_ratio_alignment("hello", "oh hello there")
+# ScoreAlignment(score=100.0, src_start=0, src_end=5, dest_start=3, dest_end=8)
 
 token_sort_ratio("new york mets", "mets new york")      # 100.0
 token_set_ratio("fuzzy was a bear", "fuzzy bear")       # 100.0
@@ -297,8 +315,8 @@ fuzzgpu.set_cpu_only(True)       # force CPU-only mode
 
 ```toml
 [dependencies]
-fuzzgpu-core = "0.3.0"                                        # GPU + CPU fallback
-# fuzzgpu-core = { version = "0.1.7", default-features = false } # CPU-only
+fuzzgpu-core = "0.4.0"                                        # GPU + CPU fallback
+# fuzzgpu-core = { version = "0.4.0", default-features = false } # CPU-only
 ```
 
 ```rust
@@ -415,7 +433,7 @@ fuzzgpu/
 │   └── process.py           # rapidfuzz.process-compatible helpers
 ├── fuzz/                    # libFuzzer targets + stable self-harness
 ├── benchmarks/              # Comparative benchmark scripts
-├── tests/                   # Python pytest suite (174 tests)
+├── tests/                   # Python pytest suite (278 tests incl. rapidfuzz differential)
 └── docs/GPU_TESTING.md      # Fault injection & GPU test conventions
 ```
 

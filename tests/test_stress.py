@@ -1,11 +1,21 @@
 """High-load stress, scalability, long string, and sustained memory stability testing."""
 
+import os
 import random
 import string
 import time
 import pytest
 import fuzzgpu
 import fuzzgpu.fuzz as fuzz
+
+# Wall-clock budgets are machine-dependent; allow CI/slow runners to disable
+# the strict timing asserts (correctness checks below still run).
+_PERF_ASSERTS = os.environ.get("FUZZGPU_SKIP_PERF_ASSERTS", "").lower() not in ("1", "true", "yes")
+
+
+def _assert_perf(elapsed, budget, label):
+    if _PERF_ASSERTS:
+        assert elapsed < budget, f"{label} took {elapsed:.2f}s (too slow)"
 
 
 def random_string(length, alphabet=string.ascii_lowercase):
@@ -29,7 +39,7 @@ class TestStressAndScalability:
         assert len(results) == 50_000
         assert all(isinstance(r, int) for r in results[:100])
         # Verify throughput is fast
-        assert elapsed < 10.0, f"50k batch took {elapsed:.2f}s (too slow)"
+        _assert_perf(elapsed, 10.0, "50k batch")
 
     def test_large_batch_jaro_winkler_50k(self):
         """Stress test Jaro-Winkler GPU kernel with 50,000 candidate strings."""
@@ -44,7 +54,7 @@ class TestStressAndScalability:
 
         assert len(results) == 50_000
         assert all(0.0 <= r <= 1.0 for r in results[:100])
-        assert elapsed < 10.0, f"50k Jaro batch took {elapsed:.2f}s (too slow)"
+        _assert_perf(elapsed, 10.0, "50k Jaro batch")
 
     def test_large_matrix_cdist_500x500(self):
         """Cross-product 500 x 500 matrix = 250,000 distance evaluations on GPU."""
@@ -58,7 +68,7 @@ class TestStressAndScalability:
 
         assert len(matrix) == 500
         assert len(matrix[0]) == 500
-        assert elapsed < 10.0, f"500x500 matrix took {elapsed:.2f}s"
+        _assert_perf(elapsed, 10.0, "500x500 matrix")
 
     def test_large_matrix_cdist_1000x1000(self):
         """Cross-product 1000 x 1000 matrix = 1,000,000 distance evaluations on GPU."""
@@ -76,7 +86,7 @@ class TestStressAndScalability:
         assert matrix[0][0] == fuzzgpu.levenshtein(list_a[0], list_b[0])
         assert matrix[500][500] == fuzzgpu.levenshtein(list_a[500], list_b[500])
         assert matrix[999][999] == fuzzgpu.levenshtein(list_a[999], list_b[999])
-        assert elapsed < 15.0, f"1000x1000 matrix took {elapsed:.2f}s"
+        _assert_perf(elapsed, 15.0, "1000x1000 matrix")
 
     def test_ultra_long_strings_cpu_fallback(self):
         """Test very long strings (up to 10,000 chars) for memory and CPU DP stability."""
@@ -120,4 +130,4 @@ class TestStressAndScalability:
         assert top_k[0][0] == "target_candidate_string"
         assert top_k[0][1] == 100.0
         assert top_k[0][2] == 12_345
-        assert elapsed < 5.0, f"Extract over 20k items took {elapsed:.2f}s"
+        _assert_perf(elapsed, 5.0, "Extract over 20k items")

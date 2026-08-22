@@ -1,11 +1,10 @@
 """rapidfuzz.distance.DamerauLevenshtein-compatible module.
 
-NOTE: This module implements the **unrestricted** Lowrance-Wagner (1975)
-algorithm which allows non-adjacent transpositions.  rapidfuzz's
-DamerauLevenshtein uses Optimal String Alignment (OSA) which forbids them.
-For OSA-compatible semantics use fuzzgpu.distance.OSA.
-Example difference: distance("ca", "abc") == 2 here (unrestricted),
-== 3 in rapidfuzz's OSA-based DamerauLevenshtein.
+Implements the **unrestricted** Damerau-Levenshtein distance (Lowrance &
+Wagner 1975), which allows non-adjacent transpositions — the same semantics
+as rapidfuzz.distance.DamerauLevenshtein (verified: distance("ca", "abc")
+== 2 in both). For the restricted variant use fuzzgpu.distance.OSA, which
+matches rapidfuzz.distance.OSA (distance("ca", "abc") == 3 in both).
 """
 from .. import fuzzgpu as _native
 from ._common import Editop, Editops, cutoff_distance, normalized_distance as _normalized

@@ -47,6 +47,12 @@ venv.bak/
 htmlcov/
 .tox/
 .nox/
+.ruff_cache/
+
+# Local scratch / agent metadata (never commit)
+.superbrain/
+dist-cpu-check/
+demo/
 
 # Freebuff workspace state
 .freebuff/

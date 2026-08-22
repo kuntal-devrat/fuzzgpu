@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "fuzzgpu"
-version = "0.3.0"
+version = "0.4.0"
 description = "Hardware-accelerated fuzzy string matching & sequence alignment — cross-platform, no CUDA required"
 readme = "README.md"
 license = { text = "MIT" }
@@ -34,6 +34,10 @@ Repository = "https://github.com/kuntal-devrat/fuzzgpu"
 Issues = "https://github.com/kuntal-devrat/fuzzgpu/issues"
 
 [tool.maturin]
+# `pyo3/extension-module` is always enabled (added on top of the crate's
+# defaults). A CPU-only wheel (no wgpu/GPU) is built with:
+#   maturin build --release --no-default-features
+# which drops the `gpu` default feature while keeping this one.
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "fuzzgpu.fuzzgpu"

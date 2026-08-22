@@ -506,8 +506,14 @@ impl GpuEngine {
             let _ = tx.send(r);
         });
         self.poll();
-        rx.recv_timeout(Self::readback_timeout())
-            .map_err(|_| FuzzGpuError::Timeout("GPU readback timed out after 10s".into()))?
+        let timeout = Self::readback_timeout();
+        rx.recv_timeout(timeout)
+            .map_err(|_| {
+                FuzzGpuError::Timeout(format!(
+                    "GPU readback timed out after {}ms",
+                    timeout.as_millis()
+                ))
+            })?
             .map_err(|e| FuzzGpuError::BufferError(format!("GPU buffer map failed: {e}")))?;
         let data = slice
             .get_mapped_range()
