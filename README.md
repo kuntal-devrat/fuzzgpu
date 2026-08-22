@@ -216,6 +216,12 @@ The full Python layer is now byte-identical to rapidfuzz 3.14.5 over a 169,744-p
 pip install fuzzgpu
 ```
 
+For a smaller, dependency-light install with no GPU/WebGPU support (CPU + Rayon only):
+
+```bash
+pip install fuzzgpu-cpu
+```
+
 ```toml
 # Rust
 [dependencies]

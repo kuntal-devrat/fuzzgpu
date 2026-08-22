@@ -101,10 +101,54 @@ jobs:
           name: wheels-sdist
           path: dist
 
+  # CPU-only wheels (no WebGPU/wgpu): built with --no-default-features and
+  # published under a SEPARATE distribution name (fuzzgpu-cpu). They cannot
+  # share the fuzzgpu name — the resulting wheel would have the identical
+  # filename/tags as the GPU build and be skipped by --skip-existing (and pip
+  # cannot select a wheel by feature). fuzzgpu-cpu installs the same `fuzzgpu`
+  # module, CPU/Rayon-only.
+  cpu-only:
+    name: Build CPU-only Wheels (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: ubuntu-latest
+            target: aarch64
+          - os: windows-latest
+            target: x64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.target == 'x64' && 'x64' || '' }}
+      - name: Publish as the fuzzgpu-cpu distribution
+        shell: bash
+        run: sed -i 's/^name = "fuzzgpu"$/name = "fuzzgpu-cpu"/' pyproject.toml
+      - name: Build CPU-only wheels (no default features)
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --no-default-features --out dist
+          sccache: 'true'
+          manylinux: auto
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-cpu-${{ matrix.target }}
+          path: dist
+
   release:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [linux, windows, macos, sdist]
+    needs: [linux, windows, macos, sdist, cpu-only]
     steps:
       - uses: actions/checkout@v4
       - name: Download all wheels and sdist
