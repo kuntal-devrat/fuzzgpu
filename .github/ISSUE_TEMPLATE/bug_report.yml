@@ -1,0 +1,58 @@
+name: Bug Report
+description: Report an issue or unexpected behavior in fuzzgpu
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide as much detail as possible to help reproduce and resolve it.
+  - type: input
+    id: version
+    attributes:
+      label: FuzzGPU Version
+      description: What version of fuzzgpu are you using? (e.g. 0.4.0)
+      placeholder: "0.4.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating System & Architecture
+      description: Select your operating system
+      options:
+        - Linux (x86_64)
+        - Linux (aarch64)
+        - macOS (Apple Silicon / arm64)
+        - macOS (Intel / x86_64)
+        - Windows (x86_64)
+        - WebAssembly / Browser
+    validations:
+      required: true
+  - type: input
+    id: gpu_info
+    attributes:
+      label: GPU & Driver Information
+      description: Output of `fuzzgpu.gpu_info()` or `fuzzgpu.hardware_info()`
+      placeholder: "e.g. Intel(R) Iris(R) Xe Graphics (Vulkan)"
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal Reproducible Example
+      description: Provide a minimal code snippet to reproduce the issue.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: true

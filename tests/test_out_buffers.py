@@ -144,6 +144,14 @@ def test_cdist_into_non_contiguous_raises():
         fuzzgpu.levenshtein_cdist_into(a, b, out)
 
 
+def test_batch_into_non_contiguous_raises():
+    query = "hello"
+    cands = ["world", "help"]
+    out = np.zeros(4, dtype=np.uint32)[::2]  # strided 1D view
+    with pytest.raises(BufferError, match=r"C-contiguous"):
+        fuzzgpu.levenshtein_batch_into(query, cands, out)
+
+
 def test_jaro_batch_into_invalid_p_raises():
     out = np.zeros(1, dtype=np.float64)
     with pytest.raises(ValueError):

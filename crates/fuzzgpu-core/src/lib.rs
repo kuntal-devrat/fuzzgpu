@@ -8,7 +8,15 @@ pub mod needleman;
 pub mod simd;
 
 #[cfg(feature = "gpu")]
+pub use damerau::gpu_ext::GpuDamerauKernel;
+#[cfg(feature = "gpu")]
 pub use gpu::{GpuEngine, GpuInfo, Result};
+#[cfg(feature = "gpu")]
+pub use jaro::gpu_ext::GpuJaroKernel;
+#[cfg(feature = "gpu")]
+pub use levenshtein::gpu_ext::GpuLevenshteinKernel;
+#[cfg(feature = "gpu")]
+pub use needleman::gpu_ext::GpuNeedlemanAffineKernel;
 
 #[cfg(not(feature = "gpu"))]
 pub type Result<T> = std::result::Result<T, String>;

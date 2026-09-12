@@ -19,9 +19,15 @@ pub fn levenshtein_myers(a: &[u8], b: &[u8]) -> u32 {
     // back to the Unicode path. Assert it here so direct Rust callers can't
     // silently get byte-semantics results.
     if !a.is_ascii() || !b.is_ascii() {
-        let a = String::from_utf8_lossy(a);
-        let b = String::from_utf8_lossy(b);
-        return crate::levenshtein::levenshtein_distance_raw(&a, &b);
+        let a_str = match std::str::from_utf8(a) {
+            Ok(s) => std::borrow::Cow::Borrowed(s),
+            Err(_) => String::from_utf8_lossy(a),
+        };
+        let b_str = match std::str::from_utf8(b) {
+            Ok(s) => std::borrow::Cow::Borrowed(s),
+            Err(_) => String::from_utf8_lossy(b),
+        };
+        return crate::levenshtein::levenshtein_distance_raw(&a_str, &b_str);
     }
     let (m, n) = (a.len(), b.len());
     if m == 0 {

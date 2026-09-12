@@ -104,8 +104,8 @@ fn main(
             let j = j_start + t;
             let i = k - j;
 
-            let prev = diags[(k - 1u) % 3u];
-            let prev2 = diags[(k - 2u) % 3u];
+            let prev_idx = (k - 1u) % 3u;
+            let prev2_idx = (k - 2u) % 3u;
 
             var cell: State;
             if (i == 0u) {
@@ -122,18 +122,18 @@ fn main(
                 let sub = select(params.mismatch_score, params.match_score, a_char == b_char);
 
                 // M(i,j) = max(M,Ix,Iy)(i-1,j-1) + sub   -- diagonal k-2.
-                let best_diag = max(prev2[j - 1u].m, max(prev2[j - 1u].ix, prev2[j - 1u].iy));
+                let best_diag = max(diags[prev2_idx][j - 1u].m, max(diags[prev2_idx][j - 1u].ix, diags[prev2_idx][j - 1u].iy));
                 let cell_m = best_diag + sub;
 
                 // Ix(i,j) from (i,j-1) -- diagonal k-1, column j-1.
-                let cell_ix = max(prev[j - 1u].ix + params.gap_extend,
-                    max(prev[j - 1u].m + params.gap_open + params.gap_extend,
-                        prev[j - 1u].iy + params.gap_open + params.gap_extend));
+                let cell_ix = max(diags[prev_idx][j - 1u].ix + params.gap_extend,
+                    max(diags[prev_idx][j - 1u].m + params.gap_open + params.gap_extend,
+                        diags[prev_idx][j - 1u].iy + params.gap_open + params.gap_extend));
 
                 // Iy(i,j) from (i-1,j) -- diagonal k-1, column j.
-                let cell_iy = max(prev[j].iy + params.gap_extend,
-                    max(prev[j].m + params.gap_open + params.gap_extend,
-                        prev[j].ix + params.gap_open + params.gap_extend));
+                let cell_iy = max(diags[prev_idx][j].iy + params.gap_extend,
+                    max(diags[prev_idx][j].m + params.gap_open + params.gap_extend,
+                        diags[prev_idx][j].ix + params.gap_open + params.gap_extend));
 
                 cell = State(cell_m, cell_ix, cell_iy);
             }

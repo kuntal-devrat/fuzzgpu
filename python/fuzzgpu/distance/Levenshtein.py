@@ -27,30 +27,42 @@ def distance(s1, s2, *, weights=(1, 1, 1), processor=None, score_cutoff=None, sc
     return cutoff_distance(value, score_cutoff)
 
 
-def similarity(s1, s2, *, processor=None, score_cutoff=None, score_hint=None):
+def _max_distance(len1, len2, weights):
+    if weights == (1, 1, 1):
+        return max(len1, len2)
+    ins, dele, sub = weights
+    s = min(sub, ins + dele)
+    if len1 >= len2:
+        return len2 * s + (len1 - len2) * dele
+    else:
+        return len1 * s + (len2 - len1) * ins
+
+
+def similarity(s1, s2, *, weights=(1, 1, 1), processor=None, score_cutoff=None, score_hint=None):
     del score_hint
     if processor:
         s1, s2 = processor(s1), processor(s2)
     # Compute maximum AFTER processing so len() reflects the processed strings.
-    maximum = max(len(s1), len(s2))
-    value = maximum - distance(s1, s2)
+    maximum = _max_distance(len(s1), len(s2), weights)
+    value = maximum - distance(s1, s2, weights=weights)
     return value if score_cutoff is None or value >= score_cutoff else 0
 
 
-def normalized_distance(s1, s2, *, processor=None, score_cutoff=None, score_hint=None):
+def normalized_distance(s1, s2, *, weights=(1, 1, 1), processor=None, score_cutoff=None, score_hint=None):
     del score_hint
     if processor:
         s1, s2 = processor(s1), processor(s2)
-    maximum = max(len(s1), len(s2))
-    value = _normalized(distance(s1, s2), maximum)
+    maximum = _max_distance(len(s1), len(s2), weights)
+    value = _normalized(distance(s1, s2, weights=weights), maximum)
     return value if score_cutoff is None or value <= score_cutoff else 1.0
 
 
-def normalized_similarity(s1, s2, *, processor=None, score_cutoff=None, score_hint=None):
+def normalized_similarity(s1, s2, *, weights=(1, 1, 1), processor=None, score_cutoff=None, score_hint=None):
     del score_hint
     if processor:
         s1, s2 = processor(s1), processor(s2)
-    value = 1.0 - _normalized(distance(s1, s2), max(len(s1), len(s2)))
+    maximum = _max_distance(len(s1), len(s2), weights)
+    value = 1.0 - _normalized(distance(s1, s2, weights=weights), maximum)
     return value if score_cutoff is None or value >= score_cutoff else 0.0
 
 

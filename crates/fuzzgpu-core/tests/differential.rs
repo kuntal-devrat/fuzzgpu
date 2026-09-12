@@ -43,6 +43,7 @@ fn any_string(max_len: usize) -> impl Strategy<Value = String> {
 
 /// ASCII string, length `1..=max_len` (non-empty: the row-wise Myers cdist
 /// kernel requires a non-empty pattern per row).
+#[allow(dead_code)]
 fn ascii_string_nz(max_len: usize) -> impl Strategy<Value = String> {
     (1usize..=max_len).prop_flat_map(move |len| {
         prop::collection::vec(prop::char::range('a', 'z'), len..=len)
@@ -50,12 +51,14 @@ fn ascii_string_nz(max_len: usize) -> impl Strategy<Value = String> {
     })
 }
 
+#[allow(dead_code)]
 fn any_pair(max_len: usize) -> impl Strategy<Value = (String, String)> {
     (any_string(max_len), any_string(max_len))
 }
 
 /// A pair of ASCII strings (the GPU Damerau kernel's gate is ASCII ≤ 32
 /// chars, so ASCII pairs are what actually runs on the shader).
+#[allow(dead_code)]
 fn ascii_pair(max_len: usize) -> impl Strategy<Value = (String, String)> {
     (ascii_string(max_len), ascii_string(max_len))
 }

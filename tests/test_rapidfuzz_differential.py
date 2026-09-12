@@ -98,6 +98,19 @@ def test_distance_modules_match_rapidfuzz(mod, fn):
             assert r == g, f"{mod}.{fn}({a!r}, {b!r}): rapidfuzz={r} fuzzgpu={g}"
 
 
+@pytest.mark.parametrize("fn", ["distance", "similarity", "normalized_distance", "normalized_similarity"])
+@pytest.mark.parametrize("weights", [(1, 1, 1), (1, 1, 2), (2, 1, 1), (1, 2, 1), (2, 3, 4)])
+def test_levenshtein_weighted_matches_rapidfuzz(fn, weights):
+    rmod, gmod = rd.Levenshtein, fd.Levenshtein
+    for a, b in _PAIRS[:20]:
+        r = getattr(rmod, fn)(a, b, weights=weights)
+        g = getattr(gmod, fn)(a, b, weights=weights)
+        if isinstance(r, float):
+            _assert_close(r, g, f"Levenshtein.{fn}({a!r}, {b!r}, weights={weights})")
+        else:
+            assert r == g, f"Levenshtein.{fn}({a!r}, {b!r}, weights={weights}): rapidfuzz={r} fuzzgpu={g}"
+
+
 @pytest.mark.parametrize("mod", ["Levenshtein", "Indel"])
 def test_editops_length_matches_rapidfuzz(mod):
     rmod, gmod = getattr(rd, mod), getattr(fd, mod)

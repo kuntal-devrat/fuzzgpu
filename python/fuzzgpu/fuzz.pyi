@@ -40,6 +40,20 @@ def extractOne(
 extract_one = extractOne
 damerau_ratio: Callable[[str, str], float]
 
+def cdist(
+    queries: Iterable[str],
+    choices: Iterable[str],
+    *,
+    scorer: Optional[Callable] = ...,
+    processor: Optional[Processor] = ...,
+    score_cutoff: Optional[float] = ...,
+    score_hint: Optional[float] = ...,
+    score_multiplier: float = ...,
+    dtype: Optional[object] = ...,
+    workers: Optional[int] = ...,
+    scorer_kwargs: Optional[dict] = ...,
+) -> object: ...
+
 class ScoreAlignment(Tuple[float, int, int, int, int]):
     score: float
     src_start: int

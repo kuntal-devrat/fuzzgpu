@@ -1,3 +1,5 @@
+#![cfg(feature = "gpu")]
+
 //! End-to-end coverage of the `FuzzGpuError::ShaderError` path from the
 //! public API.
 //!

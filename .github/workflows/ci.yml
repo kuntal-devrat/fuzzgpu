@@ -500,8 +500,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Cargo build (no default features — CPU-only fallback)
         run: cargo build --workspace --no-default-features
-      - name: Cargo check tests (no default features)
-        run: cargo test --workspace --lib --no-default-features --no-run
+      - name: Cargo test (no default features — CPU-only fallback)
+        run: cargo test --workspace --no-default-features
 
   # ── Docs build ───────────────────────────────────────────────────────────────
   docs:

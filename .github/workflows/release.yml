@@ -131,7 +131,7 @@ jobs:
           architecture: ${{ matrix.target == 'x64' && 'x64' || '' }}
       - name: Publish as the fuzzgpu-cpu distribution
         shell: bash
-        run: sed -i 's/^name = "fuzzgpu"$/name = "fuzzgpu-cpu"/' pyproject.toml
+        run: python -c "content = open('pyproject.toml').read().replace('name = \"fuzzgpu\"', 'name = \"fuzzgpu-cpu\"', 1); open('pyproject.toml', 'w').write(content)"
       - name: Build CPU-only wheels (no default features)
         uses: PyO3/maturin-action@v1
         with:

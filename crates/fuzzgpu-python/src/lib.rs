@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyString, PyStringMethods};
+#[cfg(feature = "gpu")]
 use std::sync::OnceLock;
 
 #[cfg(feature = "gpu")]
@@ -7,9 +8,12 @@ use fuzzgpu_core::gpu::GpuEngine;
 
 // ── Cached Environment Configuration ─────────────────────────
 
+#[cfg(feature = "gpu")]
 static FORCE_GPU_CACHE: OnceLock<bool> = OnceLock::new();
+#[cfg(feature = "gpu")]
 static DEBUG_CACHE: OnceLock<bool> = OnceLock::new();
 
+#[cfg(feature = "gpu")]
 #[inline]
 fn is_force_gpu() -> bool {
     *FORCE_GPU_CACHE.get_or_init(|| {
@@ -21,6 +25,7 @@ fn is_force_gpu() -> bool {
     })
 }
 
+#[cfg(feature = "gpu")]
 #[inline]
 fn is_debug_mode() -> bool {
     *DEBUG_CACHE.get_or_init(|| {
@@ -95,13 +100,18 @@ fn checked_u32_array1<'py>(
 ) -> PyResult<numpy::PyReadwriteArray1<'py, u32>> {
     use numpy::{PyArray1, PyUntypedArrayMethods};
     let arr = out.cast::<PyArray1<u32>>()?;
-    let rw = readwrite_or_err(arr)?;
+    let mut rw = readwrite_or_err(arr)?;
     if rw.len() != expected {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "out must hold exactly {} uint32 elements, got {}",
             expected,
             rw.len()
         )));
+    }
+    if rw.as_slice_mut().is_err() {
+        return Err(pyo3::exceptions::PyBufferError::new_err(
+            "out must be C-contiguous",
+        ));
     }
     Ok(rw)
 }
@@ -114,13 +124,18 @@ fn checked_f64_array1<'py>(
 ) -> PyResult<numpy::PyReadwriteArray1<'py, f64>> {
     use numpy::{PyArray1, PyUntypedArrayMethods};
     let arr = out.cast::<PyArray1<f64>>()?;
-    let rw = readwrite_or_err(arr)?;
+    let mut rw = readwrite_or_err(arr)?;
     if rw.len() != expected {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "out must hold exactly {} float64 elements, got {}",
             expected,
             rw.len()
         )));
+    }
+    if rw.as_slice_mut().is_err() {
+        return Err(pyo3::exceptions::PyBufferError::new_err(
+            "out must be C-contiguous",
+        ));
     }
     Ok(rw)
 }
@@ -134,12 +149,17 @@ fn checked_u32_array2<'py>(
 ) -> PyResult<numpy::PyReadwriteArray2<'py, u32>> {
     use numpy::{PyArray2, PyUntypedArrayMethods};
     let arr = out.cast::<PyArray2<u32>>()?;
-    let rw = readwrite_or_err(arr)?;
+    let mut rw = readwrite_or_err(arr)?;
     if rw.shape() != [rows, cols] {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "out must have shape ({rows}, {cols}), got {:?}",
             rw.shape()
         )));
+    }
+    if rw.as_slice_mut().is_err() {
+        return Err(pyo3::exceptions::PyBufferError::new_err(
+            "out must be C-contiguous",
+        ));
     }
     Ok(rw)
 }
@@ -153,12 +173,17 @@ fn checked_f64_array2<'py>(
 ) -> PyResult<numpy::PyReadwriteArray2<'py, f64>> {
     use numpy::{PyArray2, PyUntypedArrayMethods};
     let arr = out.cast::<PyArray2<f64>>()?;
-    let rw = readwrite_or_err(arr)?;
+    let mut rw = readwrite_or_err(arr)?;
     if rw.shape() != [rows, cols] {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "out must have shape ({rows}, {cols}), got {:?}",
             rw.shape()
         )));
+    }
+    if rw.as_slice_mut().is_err() {
+        return Err(pyo3::exceptions::PyBufferError::new_err(
+            "out must be C-contiguous",
+        ));
     }
     Ok(rw)
 }
@@ -370,11 +395,11 @@ fn damerau_levenshtein_distance(py: Python, a: &str, b: &str) -> PyResult<u32> {
 /// Shared compute for `damerau_levenshtein_batch` / `..._into`: GPU
 /// Lowrance-Wagner kernel (auto-routed, CPU fallback).
 fn damerau_batch_core(py: Python<'_>, query: &str, cands: &[&str]) -> PyResult<Vec<u32>> {
-    let pairs: Vec<(&str, &str)> = cands.iter().map(|c| (query, *c)).collect();
     #[cfg(feature = "gpu")]
     {
         if !GpuEngine::is_cpu_only() {
             if let Ok(kernel) = fuzzgpu_core::damerau::gpu_ext::GpuDamerauKernel::get() {
+                let pairs: Vec<(&str, &str)> = cands.iter().map(|c| (query, *c)).collect();
                 match py.detach(|| kernel.compute_batch(&pairs)) {
                     Ok(res) => return Ok(res),
                     Err(e) => {

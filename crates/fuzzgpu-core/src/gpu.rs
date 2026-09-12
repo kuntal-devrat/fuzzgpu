@@ -25,21 +25,24 @@ pub fn require_gpu() -> bool {
         .unwrap_or(false)
 }
 
-/// Opt-in dispatch serialization (safety valve). `FUZZGPU_SKIP_DISPATCH_LOCK=1`
-/// re-enables the GPU-dispatch serialization that used to be the default
-/// workaround for the rare gfx-rs/wgpu#10085 crash class (heap corruption on
-/// Intel D3D12 under >=3 concurrent dispatchers on a shared device). Dispatch
-/// is fully concurrent by default; set this env var on affected Intel hardware
-/// to serialize both the production dispatch path and the test suite.
+/// Opt-in dispatch serialization (safety valve). `FUZZGPU_SERIALIZE_DISPATCH=1`
+/// (or legacy alias `FUZZGPU_SKIP_DISPATCH_LOCK=1`) re-enables the GPU-dispatch
+/// serialization that used to be the default workaround for the rare gfx-rs/wgpu#10085
+/// crash class (heap corruption on Intel D3D12 under >=3 concurrent dispatchers on a
+/// shared device). Dispatch is fully concurrent by default; set this env var on affected
+/// Intel hardware to serialize both the production dispatch path and the test suite.
 pub(crate) fn dispatch_serialize() -> bool {
-    std::env::var("FUZZGPU_SKIP_DISPATCH_LOCK")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    let check = |var: &str| {
+        std::env::var(var)
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
+            .unwrap_or(false)
+    };
+    check("FUZZGPU_SERIALIZE_DISPATCH") || check("FUZZGPU_SKIP_DISPATCH_LOCK")
 }
 
 /// Serialize GPU access across tests. Only active when
-/// `FUZZGPU_SKIP_DISPATCH_LOCK=1` (opt-in safety valve); by default returns
-/// `None` so the test suite runs with fully concurrent GPU dispatch.
+/// `FUZZGPU_SERIALIZE_DISPATCH=1` or `FUZZGPU_SKIP_DISPATCH_LOCK=1` (opt-in safety valve);
+/// by default returns `None` so the test suite runs with fully concurrent GPU dispatch.
 pub fn gpu_test_lock() -> Option<std::sync::MutexGuard<'static, ()>> {
     if !dispatch_serialize() {
         return None;
@@ -802,13 +805,25 @@ mod tests {
         disarm_shader_error_fault();
     }
 
-    /// dispatch_serialize must read FUZZGPU_SKIP_DISPATCH_LOCK and return
-    /// true only when it is set to '1' or 'true' (case-insensitive). The
+    /// dispatch_serialize must read FUZZGPU_SERIALIZE_DISPATCH or FUZZGPU_SKIP_DISPATCH_LOCK
+    /// and return true only when set to '1' or 'true' (case-insensitive). The
     /// serialization is opt-in: unset (default) means fully concurrent.
     #[test]
     fn test_dispatch_serialize_opt_in() {
+        std::env::remove_var("FUZZGPU_SERIALIZE_DISPATCH");
         std::env::remove_var("FUZZGPU_SKIP_DISPATCH_LOCK");
         assert!(!dispatch_serialize());
+
+        // Primary self-documenting variable
+        std::env::set_var("FUZZGPU_SERIALIZE_DISPATCH", "1");
+        assert!(dispatch_serialize());
+        std::env::set_var("FUZZGPU_SERIALIZE_DISPATCH", "true");
+        assert!(dispatch_serialize());
+        std::env::set_var("FUZZGPU_SERIALIZE_DISPATCH", "0");
+        assert!(!dispatch_serialize());
+        std::env::remove_var("FUZZGPU_SERIALIZE_DISPATCH");
+
+        // Backward-compatible alias
         std::env::set_var("FUZZGPU_SKIP_DISPATCH_LOCK", "1");
         assert!(dispatch_serialize());
         std::env::set_var("FUZZGPU_SKIP_DISPATCH_LOCK", "true");

@@ -9,7 +9,7 @@
 *Cross-platform GPU compute via WebGPU (`wgpu`) & Multi-Core CPU parallelism with Rayon. Zero CUDA dependencies.*
 
 [![PyPI 
-Version](https://img.shields.io/badge/pypi-v0.4.0-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
+Version](https://img.shields.io/badge/pypi-v0.4.1-blue.svg?style=flat-square)](https://pypi.org/project/fuzzgpu/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg?style=flat-square)](https://www.rust-lang.org)
 [![Cross Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20WASM-lightgrey.svg?style=flat-square)](https://github.com/kuntal-devrat/fuzzgpu)
@@ -32,7 +32,21 @@ No NVIDIA CUDA drivers or complex toolkits required.
 
 ---
 
-## What's New in v0.4.0
+## What's New in v0.4.1
+
+### Production hardening & Performance
+- **Fail-fast contiguous buffer validation** — `*_into` zero-allocation APIs now validate numpy C-contiguity before any GPU/CPU dispatch, preventing wasted compute on strided arrays.
+- **RapidFuzz weighted Levenshtein parity** — `similarity`, `normalized_distance`, and `normalized_similarity` now support `weights=(1, 1, 1)` with exact weighted maximum distance calculation.
+- **Wavefront WGSL register optimization** — replaced ~1.5 KB private array stack copies with direct workgroup indexing in Gotoh affine gap DP.
+- **Zero-heap Myers SIMD fallback** — eliminated heap allocations on non-ASCII input paths with `std::str::from_utf8` / `Cow`.
+- **PEP 561 type safety** — shipped `py.typed` and comprehensive `.pyi` type stubs for all 54 public APIs and submodules.
+- **Community governance & Health files** — added CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, and GitHub issue/PR templates.
+- **Cross-platform release CI** — made CPU wheel publishing portable across Linux, Windows, and macOS runners.
+
+---
+
+<details>
+<summary><b>Previous (v0.4.0)</b></summary>
 
 ### Production hardening
 - **WRatio score_cutoff parity** — WRatio now threads a rescaled running cutoff through its token/partial-token steps exactly as rapidfuzz does; high cutoffs no longer leak scaled token ratios (verified against rapidfuzz 3.14.5).
@@ -43,10 +57,7 @@ No NVIDIA CUDA drivers or complex toolkits required.
 - **Flaky stress asserts gated** — wall-clock budgets in `test_stress.py` are disabled via `FUZZGPU_SKIP_PERF_ASSERTS=1` (correctness checks always run).
 - **Accurate GPU timeout message** — readback timeouts now report the actual configured timeout.
 
-### Includes all v0.3.0 fixes
-All fixes from v0.3.0 are included.
-
----
+</details>
 
 <details>
 <summary><b>Previous (v0.3.0)</b></summary>
@@ -225,7 +236,7 @@ pip install fuzzgpu-cpu
 ```toml
 # Rust
 [dependencies]
-fuzzgpu-core = "0.4.0"
+fuzzgpu-core = "0.4.1"
 ```
 
 ---
@@ -245,7 +256,7 @@ candidates = ["hallo", "hullo", "jello", "yellow", "hello world"] * 10_000
 distances  = fuzzgpu.levenshtein_batch("hello", candidates)
 jw_scores  = fuzzgpu.jaro_winkler_batch("hello", candidates, p=0.1)
 nw_scores  = fuzzgpu.needleman_wunsch_affine_batch(
-    "AGTACGCA", candidates, match=2, mismatch=-1, gap_open=-3, gap_extend=-1
+    "AGTACGCA", candidates, match_score=2, mismatch_score=-1, gap_open=-3, gap_extend=-1
 )
 
 # ── Cross-product distance matrix ─────────────────────────────────────────────
@@ -321,12 +332,12 @@ fuzzgpu.set_cpu_only(True)       # force CPU-only mode
 
 ```toml
 [dependencies]
-fuzzgpu-core = "0.4.0"                                        # GPU + CPU fallback
-# fuzzgpu-core = { version = "0.4.0", default-features = false } # CPU-only
+fuzzgpu-core = "0.4.1"                                        # GPU + CPU fallback
+# fuzzgpu-core = { version = "0.4.1", default-features = false } # CPU-only
 ```
 
 ```rust
-use fuzzgpu_core::levenshtein::gpu_ext::GpuLevenshteinKernel;
+use fuzzgpu_core::GpuLevenshteinKernel;
 
 fn main() -> fuzzgpu_core::Result<()> {
     let kernel = GpuLevenshteinKernel::get()?;
@@ -467,7 +478,7 @@ cargo test --workspace
 | `FUZZGPU_DEBUG` | Log GPU→CPU fallback decisions |
 | `FUZZGPU_SIMD` | Force ISA: `portable\|neon\|avx2\|avx512` |
 | `FUZZGPU_READBACK_TIMEOUT_MS` | GPU readback timeout (default 10000 ms) |
-| `FUZZGPU_SKIP_DISPATCH_LOCK` | Opt-in GPU dispatch serialization (safety valve for the rare gfx-rs/wgpu#10085 crash class on Intel D3D12; dispatch is fully concurrent by default) |
+| `FUZZGPU_SERIALIZE_DISPATCH` | Opt-in GPU dispatch serialization (safety valve for rare driver heap corruption on Intel D3D12; dispatch is fully concurrent by default). Legacy alias: `FUZZGPU_SKIP_DISPATCH_LOCK` |
 | `FUZZGPU_REQUIRE_GPU` | In tests: fail instead of skip when no GPU |
 | `WGPU_BACKEND` | Force wgpu backend: `vulkan\|metal\|dx12` |
 | `PROPTEST_CASES` | Override proptest case count |
