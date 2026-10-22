@@ -1761,8 +1761,8 @@ mod tests {
             let b: Vec<u8> = (0..n)
                 .map(|_| b'a' + (state.wrapping_mul(17) % 26) as u8)
                 .collect();
-            let oa = String::from_utf8(a.clone()).unwrap();
-            let ob = String::from_utf8(b.clone()).unwrap();
+            let oa = String::from_utf8_lossy(&a).into_owned();
+            let ob = String::from_utf8_lossy(&b).into_owned();
             let got = jaro_bitpar(&a, &b);
             let expect = jaro(&oa, &ob);
             assert!(
@@ -1855,8 +1855,8 @@ mod tests {
         // Heap path (> 128 bytes) — must agree with the reference too.
         let long_a: Vec<u8> = (0..200).map(|i| b'a' + (i % 26)).collect();
         let long_b: Vec<u8> = (0..200).map(|i| b'b' + (i % 26)).collect();
-        let oa = String::from_utf8(long_a).unwrap();
-        let ob = String::from_utf8(long_b).unwrap();
+        let oa = String::from_utf8_lossy(&long_a).into_owned();
+        let ob = String::from_utf8_lossy(&long_b).into_owned();
         let simd = jaro_optimized(oa.as_bytes(), ob.as_bytes());
         let reference = jaro(&oa, &ob);
         assert!(
