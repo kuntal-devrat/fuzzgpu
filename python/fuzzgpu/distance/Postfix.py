@@ -1,7 +1,5 @@
 """rapidfuzz.distance.Postfix-compatible module."""
 
-from ._common import normalized_distance as _normalized
-
 
 def similarity(s1, s2, *, processor=None, score_cutoff=None, score_hint=None):
     del score_hint
