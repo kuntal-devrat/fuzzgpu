@@ -169,7 +169,8 @@ __all__ = [
     "jaro_similarity", "jaro_winkler_similarity", "jaro_winkler_batch_fn",
     "jaro_winkler_batch_into", "jaro_winkler_cdist", "jaro_winkler_cdist_into",
     # Fuzzy scorers
-    "fuzz_ratio", "fuzz_partial_ratio", "fuzz_token_sort_ratio",
+    "fuzz_ratio", "fuzz_partial_ratio", "fuzz_partial_ratio_alignment",
+    "fuzz_token_sort_ratio",
     "fuzz_token_set_ratio", "fuzz_token_ratio",
     "fuzz_wratio", "fuzz_ratio_batch",
     "fuzz_extract", "fuzz_extract_one",
